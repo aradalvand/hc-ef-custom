@@ -19,6 +19,10 @@ public class UseTestAttribute : ObjectFieldDescriptorAttribute
 			await next(context);
 			var s = JsonSerializer.Serialize(context.Result, new JsonSerializerOptions { WriteIndented = true });
 			Console.WriteLine($"context.Result: {s}");
+			context.Result = new[]
+			{
+				new { FirstName = "Arad Alvand" },
+			};
 		});
 	}
 }

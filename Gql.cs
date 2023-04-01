@@ -1,44 +1,46 @@
 ﻿using System.Linq.Expressions;
+using System.Reflection;
 using System.Reflection.Emit;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using HotChocolate.Resolvers;
+using AgileObjects.ReadableExpressions;
 
 namespace hc_ef_custom.Types;
 
 [QueryType]
 public static class Query
 {
-	[UseTest]
+	[UseSingleOrDefault]
 	public static IQueryable<Author>? GetAuthor(
 		AppDbContext db,
 		IResolverContext context
 	)
 	{
-		var result = db.Books.Select(b => new
-		{
-			Foo = b.Foo(5),
-		}).ToList();
-		Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
-		// Console.ForegroundColor = ConsoleColor.Cyan;
-
-		// var selections = context.GetSelections((IObjectType)context.Selection.Type);
-		// var selectedFields = selections.Select(s => s.Field);
-		// foreach (var field in selectedFields)
+		// var result = db.Books.Select(b => new
 		// {
-		// 	Console.WriteLine($"Name: {field.Name}");
-		// 	Console.WriteLine($"Member: {field.Member}");
-		// 	Console.WriteLine($"field.ContextData[...]: {field.ContextData.GetValueOrDefault("Expression")}");
-		// 	Console.WriteLine($"Type: {field.Type}");
-		// 	Console.WriteLine("---");
-		// }
+		// 	Foo = b.Foo(5),
+		// }).ToList();
+		// Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
 
-		//Expression.MemberBind()
-		// Expression.Lambda()
+		var selections = context.GetSelections((IObjectType)context.Selection.Type);
 
-		// var res = db.Authors.Project(context);
-		// Console.ForegroundColor = ConsoleColor.Cyan;
-		// Console.WriteLine(res.Expression);
+		var param = Expression.Parameter(typeof(Author));
+		var propertyAccesses = selections.Select(s =>
+			Expression.Convert(
+				Expression.Property(param, (PropertyInfo)s.Field.Member!),
+				typeof(object)
+			)
+		);
+		var arrayInit = Expression.NewArrayInit(typeof(object), propertyAccesses);
+		var lambda = (Expression<Func<Author, object[]>>)Expression.Lambda(arrayInit, param);
+
+		var result = db.Authors.Select(lambda).ToList();
+
+		Console.ForegroundColor = ConsoleColor.Cyan;
+		Console.WriteLine(lambda.ToReadableString());
+		Console.ForegroundColor = ConsoleColor.Magenta;
+		Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
 		return null;
 	}
 }
