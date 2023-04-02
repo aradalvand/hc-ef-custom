@@ -12,6 +12,7 @@ namespace hc_ef_custom.Types;
 [QueryType]
 public static class Query
 {
+	public const string ExtraExpressions = "ExtraExpressions";
 	[UseSingleOrDefault]
 	[AddExpr]
 	public static IQueryable<Author>? GetAuthor(
@@ -28,24 +29,34 @@ public static class Query
 		var selections = context.GetSelections((IObjectType)context.Selection.Type);
 
 		var param = Expression.Parameter(typeof(Author));
-		var arrayInitializers = new List<Expression>();
-		arrayInitializers.AddRange(selections.Select(s =>
-			Expression.Convert(
-				Expression.Property(param, (PropertyInfo)s.Field.Member!),
-				typeof(object)
-			)
-		));
 
-		Console.WriteLine(JsonSerializer.Serialize(context.ContextData.Keys, new JsonSerializerOptions { WriteIndented = true }));
-		if (context.ContextData.TryGetValue("Expr2", out var exprObj) && exprObj is LambdaExpression expr)
+		var expressions = new List<Expression>();
+
+		foreach (var selection in selections)
 		{
-			Console.WriteLine(expr.ToReadableString());
-			var ready = ReplacingExpressionVisitor.Replace(expr.Parameters.First(), param, expr.Body);
-			Console.WriteLine(ready.ToReadableString());
-			arrayInitializers.Add(Expression.Convert(ready, typeof(object)));
+			expressions.Add(Expression.Property(
+				param,
+				(PropertyInfo)selection.Field.Member!
+			));
 		}
 
-		var arrayNew = Expression.NewArrayInit(typeof(object), arrayInitializers);
+		var extraExpressions = context.GetLocalStateOrDefault<IEnumerable<LambdaExpression>>(ExtraExpressions);
+		if (extraExpressions is not null)
+		{
+			foreach (var expr in extraExpressions)
+			{
+				expressions.Add(ReplacingExpressionVisitor.Replace(
+					expr.Parameters.First(),
+					param,
+					expr.Body
+				));
+			}
+		}
+
+		var arrayNew = Expression.NewArrayInit(
+			typeof(object),
+			expressions.Select(e => Expression.Convert(e, typeof(object))) // NOTE: Necessary — see https://stackoverflow.com/a/2200247/7734384
+		);
 		var lambda = (Expression<Func<Author, object[]>>)Expression.Lambda(arrayNew, param);
 
 		Console.ForegroundColor = ConsoleColor.Cyan;
@@ -55,6 +66,16 @@ public static class Query
 		Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
 
 		return null;
+	}
+
+	private static void PrettyPrint(object? obj)
+	{
+		// Console.WriteLine(
+		// 	JsonSerializer.Serialize(obj, new JsonSerializerOptions
+		// 	{
+		// 		WriteIndented = true
+		// 	})
+		// );
 	}
 }
 

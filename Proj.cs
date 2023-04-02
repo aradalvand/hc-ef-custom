@@ -47,8 +47,13 @@ public class AddExprAttribute : ObjectFieldDescriptorAttribute
 
 		descriptor.Use(next => async context =>
 		{
-			Expression foo = (Author kirekhar) => kirekhar.FirstName.StartsWith("Kir");
-			context.ContextData["Expr2"] = foo;
+			context.SetLocalState(Query.ExtraExpressions, new LambdaExpression[]
+			{
+				(Author a) => a.FirstName.StartsWith("Kir"),
+			});
+			// context.ContextData[Query.ExtraExpressions] = new LambdaExpression[] {
+			// 	(Author a) => a.FirstName.StartsWith("Kir")
+			// };
 			await next(context);
 		});
 	}
