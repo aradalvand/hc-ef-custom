@@ -37,8 +37,6 @@ public class AddExprAttribute : ObjectFieldDescriptorAttribute
 
 	protected override void OnConfigure(IDescriptorContext context, IObjectFieldDescriptor descriptor, MemberInfo member)
 	{
-		context.ContextData["Foo"] = 1;
-		Console.WriteLine("OnConfigure");
 		descriptor.Extend().OnBeforeCreate(d =>
 		{
 			Expression foo = (Author a) => a.FirstName.StartsWith("Kir");

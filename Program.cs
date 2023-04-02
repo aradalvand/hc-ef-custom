@@ -25,3 +25,4 @@ app.Run();
 // - Fields like currentUserPositionOnCourse could be part of their parent type (User)
 // - Inheritance would work (Lesson, VideoLesson, ArticleLesson)
 // - We could use services in the projections
+// - (Maybe not) We may be able to remove some fields on the `Query` type and for example to get info about a course's instructor, we just do `courseById(id: "") { instructor { ... } }`

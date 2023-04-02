@@ -18,7 +18,8 @@ public static class Query
 	[AddExpr]
 	public static IQueryable<Book>? GetBook(
 		AppDbContext db,
-		IResolverContext context
+		IResolverContext context,
+		int id
 	)
 	{
 		// var result = db.Books.Select(b => new
@@ -29,6 +30,7 @@ public static class Query
 
 		var topSelection = context.GetSelections((IObjectType)context.Selection.Type.NamedType());
 		var param = Expression.Parameter(typeof(Book));
+		PrettyPrint(context.Selection.Field.ContextData.Keys);
 
 		IEnumerable<Expression> Project(IEnumerable<ISelection> selections, Expression on)
 		{
@@ -62,7 +64,7 @@ public static class Query
 							Project(innerSelections, param).Select(e => Expression.Convert(e, typeof(object)))
 						);
 						var lambda = Expression.Lambda(arrayInit, param);
-						var select = Expression.Call(
+						var select = Expression.Call( // NOTE: https://stackoverflow.com/a/51896729
 							typeof(Enumerable),
 							nameof(Enumerable.Select),
 							new Type[] { objectType.RuntimeType, lambda.Body.Type },
@@ -101,21 +103,25 @@ public static class Query
 
 		Console.ForegroundColor = ConsoleColor.Cyan;
 		Console.WriteLine(lambda.ToReadableString());
-		var result = db.Books.Select(lambda).ToList();
+		var result = db.Books
+			.Where(b => b.Id == id)
+			.Select(lambda)
+			.ToList();
 		Console.ForegroundColor = ConsoleColor.Magenta;
 		Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+		Console.ResetColor();
 
 		return null;
 	}
 
 	private static void PrettyPrint(object? obj)
 	{
-		// Console.WriteLine(
-		// 	JsonSerializer.Serialize(obj, new JsonSerializerOptions
-		// 	{
-		// 		WriteIndented = true
-		// 	})
-		// );
+		Console.WriteLine(
+			JsonSerializer.Serialize(obj, new JsonSerializerOptions
+			{
+				WriteIndented = true
+			})
+		);
 	}
 }
 
