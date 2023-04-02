@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using HotChocolate.Resolvers;
 using AgileObjects.ReadableExpressions;
 using Microsoft.EntityFrameworkCore.Query;
+using HotChocolate.Execution.Processing;
 
 namespace hc_ef_custom.Types;
 
@@ -15,7 +16,7 @@ public static class Query
 	public const string ExtraExpressions = "ExtraExpressions";
 	[UseSingleOrDefault]
 	[AddExpr]
-	public static IQueryable<Author>? GetAuthor(
+	public static IQueryable<Book>? GetBook(
 		AppDbContext db,
 		IResolverContext context
 	)
@@ -26,19 +27,33 @@ public static class Query
 		// }).ToList();
 		// Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
 
-		var selections = context.GetSelections((IObjectType)context.Selection.Type);
-
-		var param = Expression.Parameter(typeof(Author));
+		var s = context.GetSelections((IObjectType)context.Selection.Type);
+		var param = Expression.Parameter(typeof(Book));
 
 		var expressions = new List<Expression>();
 
-		foreach (var selection in selections)
+		void Project(IEnumerable<ISelection> selections, Expression on)
 		{
-			expressions.Add(Expression.Property(
-				param,
-				(PropertyInfo)selection.Field.Member!
-			));
+			foreach (var selection in selections)
+			{
+				Console.ForegroundColor = ConsoleColor.Yellow;
+				Console.WriteLine($"Projecting {selection.Field.Name}");
+				Console.ResetColor();
+
+				var propertyExpr = Expression.Property(
+					on,
+					(PropertyInfo)selection.Field.Member!
+				);
+				if (selection.SelectionSet is null) // NOTE: If leaf
+					expressions.Add(propertyExpr);
+				else
+				{
+					var innerSelections = context.GetSelections((IObjectType)selection.Type.InnerType(), selection);
+					Project(innerSelections, propertyExpr);
+				}
+			}
 		}
+		Project(s, param);
 
 		var extraExpressions = context.GetLocalStateOrDefault<IEnumerable<LambdaExpression>>(ExtraExpressions);
 		if (extraExpressions is not null)
@@ -57,11 +72,11 @@ public static class Query
 			typeof(object),
 			expressions.Select(e => Expression.Convert(e, typeof(object))) // NOTE: Necessary — see https://stackoverflow.com/a/2200247/7734384
 		);
-		var lambda = (Expression<Func<Author, object[]>>)Expression.Lambda(arrayNew, param);
+		var lambda = (Expression<Func<Book, object[]>>)Expression.Lambda(arrayNew, param);
 
 		Console.ForegroundColor = ConsoleColor.Cyan;
 		Console.WriteLine(lambda.ToReadableString());
-		var result = db.Authors.Select(lambda).ToList();
+		var result = db.Books.Select(lambda).ToList();
 		Console.ForegroundColor = ConsoleColor.Magenta;
 		Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
 

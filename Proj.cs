@@ -49,7 +49,7 @@ public class AddExprAttribute : ObjectFieldDescriptorAttribute
 		{
 			context.SetLocalState(Query.ExtraExpressions, new LambdaExpression[]
 			{
-				(Author a) => a.FirstName.StartsWith("Kir"),
+				(Book b) => b.Title.StartsWith("Kir"),
 			});
 			// context.ContextData[Query.ExtraExpressions] = new LambdaExpression[] {
 			// 	(Author a) => a.FirstName.StartsWith("Kir")
@@ -58,3 +58,21 @@ public class AddExprAttribute : ObjectFieldDescriptorAttribute
 		});
 	}
 }
+
+// public record Course(
+// 	int Id,
+// 	string Title,
+// 	string MiniTitle,
+// 	double AverageRating
+// );
+
+// public class CourseType : ObjectType<Course>
+// {
+// 	protected override void Configure(IObjectTypeDescriptor<Course> descriptor)
+// 	{
+// 		descriptor.CorrespondsTo<Entities.Course>();
+
+// 		descriptor.Field(c => c.AverageRating)
+// 			.Computed()
+// 	}
+// }
