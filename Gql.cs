@@ -13,21 +13,14 @@ namespace hc_ef_custom.Types;
 [QueryType]
 public static class Query
 {
-	public const string ExtraExpressions = "ExtraExpressions";
+	public const string AuthContextKey = "Auth";
 	[UseSingleOrDefault]
-	[AddExpr]
 	public static IQueryable<Book>? GetBook(
 		AppDbContext db,
 		IResolverContext context,
 		int id
 	)
 	{
-		// var result = db.Books.Select(b => new
-		// {
-		// 	Foo = b.Foo(5),
-		// }).ToList();
-		// Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
-
 		var topSelection = context.GetSelections((IObjectType)context.Selection.Type.NamedType());
 		var param = Expression.Parameter(typeof(Book));
 		PrettyPrint(context.Selection.Field.ContextData.Keys);
@@ -77,23 +70,23 @@ public static class Query
 						expressions.AddRange(Project(innerSelections, propertyExpr));
 					}
 				}
+
+				var auth = selection.Field.ContextData.GetValueOrDefault(AuthContextKey);
+				if (auth is IEnumerable<LambdaExpression> authExprs)
+				{
+					foreach (var expr in authExprs)
+					{
+						expressions.Add(ReplacingExpressionVisitor.Replace(
+							expr.Parameters.First(),
+							param,
+							expr.Body
+						));
+					}
+				}
 			}
 
 			return expressions; // NOTE: Necessary — see https://stackoverflow.com/a/2200247/7734384
 		}
-
-		// var extraExpressions = context.GetLocalStateOrDefault<IEnumerable<LambdaExpression>>(ExtraExpressions);
-		// if (extraExpressions is not null)
-		// {
-		// 	foreach (var expr in extraExpressions)
-		// 	{
-		// 		expressions.Add(ReplacingExpressionVisitor.Replace(
-		// 			expr.Parameters.First(),
-		// 			param,
-		// 			expr.Body
-		// 		));
-		// 	}
-		// }
 
 		var arrayNew = Expression.NewArrayInit(
 			typeof(object),
@@ -125,9 +118,9 @@ public static class Query
 	}
 }
 
-public class AuthorType : ObjectType<Author>
+public class BookType : ObjectType<Book>
 {
-	protected override void Configure(IObjectTypeDescriptor<Author> descriptor)
+	protected override void Configure(IObjectTypeDescriptor<Book> descriptor)
 	{
 		// descriptor.Ignore();
 
@@ -135,24 +128,26 @@ public class AuthorType : ObjectType<Author>
 		// 	.Type<NonNullType<StringType>>()
 		// 	.Computed(() => "Foo Bar");
 
-		descriptor.Field(a => a.FullName).Computed(() => "");
+		descriptor.Field(a => a.Title)
+			.Auth();
 	}
 }
 
 
 public static class ObjectFieldDescriptorExtensions
 {
-	public static IObjectFieldDescriptor Computed<TValue>(
-		this IObjectFieldDescriptor descriptor,
-		Expression<Func<TValue>> expr
+	public static IObjectFieldDescriptor Auth(
+		this IObjectFieldDescriptor descriptor
 	)
 	{
 		descriptor.Extend().OnBeforeCreate(d =>
 		{
-			d.ContextData["Expression"] = expr; // https://github.com/ChilliCream/graphql-platform/blob/6e9b7a9936f36f300903b764c0a3d39d5e67347a/src/HotChocolate/Data/src/Data/Projections/Extensions/ProjectionObjectFieldDescriptorExtensions.cs#L52
+			// https://github.com/ChilliCream/graphql-platform/blob/6e9b7a9936f36f300903b764c0a3d39d5e67347a/src/HotChocolate/Data/src/Data/Projections/Extensions/ProjectionObjectFieldDescriptorExtensions.cs#L52
+			Expression<Func<Book, bool>> expr = b => b.Title.StartsWith("Hello");
+			d.ContextData[Query.AuthContextKey] = new[] { expr };
 		});
-		descriptor.Type(typeof(TValue));
-		descriptor.Resolve(ctx => expr.Compile().Invoke());
+		// descriptor.Type(typeof(TValue));
+		// descriptor.Resolve(ctx => expr.Compile().Invoke());
 
 		return descriptor;
 	}
