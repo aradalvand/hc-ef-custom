@@ -2,6 +2,7 @@ using System.Reflection;
 using HotChocolate.Types.Descriptors;
 
 using System.Text.Json;
+using System.Linq.Expressions;
 
 namespace hc_ef_custom.Types;
 
@@ -23,6 +24,32 @@ public class UseTestAttribute : ObjectFieldDescriptorAttribute
 			{
 				new { FirstName = "Arad Alvand" },
 			};
+		});
+	}
+}
+
+public class AddExprAttribute : ObjectFieldDescriptorAttribute
+{
+	public AddExprAttribute()
+	{
+
+	}
+
+	protected override void OnConfigure(IDescriptorContext context, IObjectFieldDescriptor descriptor, MemberInfo member)
+	{
+		context.ContextData["Foo"] = 1;
+		Console.WriteLine("OnConfigure");
+		descriptor.Extend().OnBeforeCreate(d =>
+		{
+			Expression foo = (Author a) => a.FirstName.StartsWith("Kir");
+			d.ContextData["Expr1"] = foo;
+		});
+
+		descriptor.Use(next => async context =>
+		{
+			Expression foo = (Author kirekhar) => kirekhar.FirstName.StartsWith("Kir");
+			context.ContextData["Expr2"] = foo;
+			await next(context);
 		});
 	}
 }
