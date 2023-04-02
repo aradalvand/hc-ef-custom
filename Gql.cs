@@ -27,50 +27,75 @@ public static class Query
 		// }).ToList();
 		// Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
 
-		var s = context.GetSelections((IObjectType)context.Selection.Type);
+		var topSelection = context.GetSelections((IObjectType)context.Selection.Type.NamedType());
 		var param = Expression.Parameter(typeof(Book));
 
-		var expressions = new List<Expression>();
-
-		void Project(IEnumerable<ISelection> selections, Expression on)
+		IEnumerable<Expression> Project(IEnumerable<ISelection> selections, Expression on)
 		{
+			var expressions = new List<Expression>();
+
 			foreach (var selection in selections)
 			{
-				Console.ForegroundColor = ConsoleColor.Yellow;
-				Console.WriteLine($"Projecting {selection.Field.Name}");
-				Console.ResetColor();
-
+				var property = (PropertyInfo)selection.Field.Member!;
 				var propertyExpr = Expression.Property(
 					on,
-					(PropertyInfo)selection.Field.Member!
+					property
 				);
-				if (selection.SelectionSet is null) // NOTE: If leaf
+
+				if (selection.SelectionSet is null)
+				{
 					expressions.Add(propertyExpr);
+				}
 				else
 				{
-					var innerSelections = context.GetSelections((IObjectType)selection.Type.InnerType(), selection);
-					Project(innerSelections, propertyExpr);
+					var objectType = (IObjectType)selection.Type.NamedType();
+					var innerSelections = context.GetSelections(
+						objectType,
+						selection
+					);
+					if (selection.Type.IsListType())
+					{
+						// TODO: Duplicated outside
+						var param = Expression.Parameter(objectType.RuntimeType);
+						var arrayInit = Expression.NewArrayInit(
+							typeof(object),
+							Project(innerSelections, param).Select(e => Expression.Convert(e, typeof(object)))
+						);
+						var lambda = Expression.Lambda(arrayInit, param);
+						var select = Expression.Call(
+							typeof(Enumerable),
+							nameof(Enumerable.Select),
+							new Type[] { objectType.RuntimeType, lambda.Body.Type },
+							propertyExpr, lambda // NOTE: `propertyExpr` here is what gets passed to `Select` as its `this` argument, and `lambda` is the lambda that gets passed to it.
+						);
+						expressions.Add(select);
+					}
+					else
+					{
+						expressions.AddRange(Project(innerSelections, propertyExpr));
+					}
 				}
 			}
-		}
-		Project(s, param);
 
-		var extraExpressions = context.GetLocalStateOrDefault<IEnumerable<LambdaExpression>>(ExtraExpressions);
-		if (extraExpressions is not null)
-		{
-			foreach (var expr in extraExpressions)
-			{
-				expressions.Add(ReplacingExpressionVisitor.Replace(
-					expr.Parameters.First(),
-					param,
-					expr.Body
-				));
-			}
+			return expressions; // NOTE: Necessary — see https://stackoverflow.com/a/2200247/7734384
 		}
+
+		// var extraExpressions = context.GetLocalStateOrDefault<IEnumerable<LambdaExpression>>(ExtraExpressions);
+		// if (extraExpressions is not null)
+		// {
+		// 	foreach (var expr in extraExpressions)
+		// 	{
+		// 		expressions.Add(ReplacingExpressionVisitor.Replace(
+		// 			expr.Parameters.First(),
+		// 			param,
+		// 			expr.Body
+		// 		));
+		// 	}
+		// }
 
 		var arrayNew = Expression.NewArrayInit(
 			typeof(object),
-			expressions.Select(e => Expression.Convert(e, typeof(object))) // NOTE: Necessary — see https://stackoverflow.com/a/2200247/7734384
+			Project(topSelection, param).Select(e => Expression.Convert(e, typeof(object)))
 		);
 		var lambda = (Expression<Func<Book, object[]>>)Expression.Lambda(arrayNew, param);
 
