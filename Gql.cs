@@ -14,16 +14,42 @@ namespace hc_ef_custom.Types;
 public static class Query
 {
 	public const string AuthContextKey = "Auth";
-	[UseSingleOrDefault]
-	public static IQueryable<Book>? GetBook(
+
+	public static async Task<Book?> GetBook(
 		AppDbContext db,
 		IResolverContext context,
 		int id
 	)
 	{
+		await db.Books.Where(b => b.Id == id)
+			.ProjectCustom(context, ResultType.Single);
+
+		return null;
+	}
+
+	public static async Task<Author?> GetAuthor(
+		AppDbContext db,
+		IResolverContext context,
+		int id
+	)
+	{
+		await db.Authors.Where(b => b.Id == id)
+			.ProjectCustom(context, ResultType.Single);
+
+		return null;
+	}
+}
+
+public static class QueryableExtensions
+{
+	public static async Task ProjectCustom<T>(
+		this IQueryable<T> query,
+		IResolverContext context,
+		ResultType resultType
+	)
+	{
 		var topSelection = context.GetSelections((IObjectType)context.Selection.Type.NamedType());
-		var param = Expression.Parameter(typeof(Book));
-		PrettyPrint(context.Selection.Field.ContextData.Keys);
+		var param = Expression.Parameter(typeof(T));
 
 		IEnumerable<Expression> Project(IEnumerable<ISelection> selections, Expression on)
 		{
@@ -71,51 +97,46 @@ public static class Query
 					}
 				}
 
-				var auth = selection.Field.ContextData.GetValueOrDefault(AuthContextKey);
-				if (auth is IEnumerable<LambdaExpression> authExprs)
+				if (selection.Field.ContextData.GetValueOrDefault(Query.AuthContextKey) is IEnumerable<AuthRule<T>> authRules)
 				{
-					foreach (var expr in authExprs)
+					foreach (var (rule, _) in authRules.Where(r => r.ShouldApply?.Invoke(selection) ?? true))
 					{
 						expressions.Add(ReplacingExpressionVisitor.Replace(
-							expr.Parameters.First(),
+							rule.Parameters.First(),
 							param,
-							expr.Body
+							rule.Body
 						));
 					}
 				}
 			}
 
-			return expressions; // NOTE: Necessary — see https://stackoverflow.com/a/2200247/7734384
+			return expressions;
 		}
 
 		var arrayNew = Expression.NewArrayInit(
 			typeof(object),
-			Project(topSelection, param).Select(e => Expression.Convert(e, typeof(object)))
+			Project(topSelection, param).Select(e => Expression.Convert(e, typeof(object))) // NOTE: Necessary — see https://stackoverflow.com/a/2200247/7734384
 		);
-		var lambda = (Expression<Func<Book, object[]>>)Expression.Lambda(arrayNew, param);
+		var lambda = (Expression<Func<T, object[]>>)Expression.Lambda(arrayNew, param);
 
 		Console.ForegroundColor = ConsoleColor.Cyan;
-		Console.WriteLine(lambda.ToReadableString());
-		var result = db.Books
-			.Where(b => b.Id == id)
-			.Select(lambda)
-			.ToList();
-		Console.ForegroundColor = ConsoleColor.Magenta;
-		Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+		Console.WriteLine($"EXPRESSION: {lambda.ToReadableString()}");
+
+		var selectedQuery = query.Select(lambda);
+		var result = await selectedQuery.FirstOrDefaultAsync();
+
+		Console.ForegroundColor = ConsoleColor.Yellow;
+		Console.WriteLine($"RESULT: {JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })}");
 		Console.ResetColor();
 
-		return null;
+		Console.WriteLine("----------");
 	}
+}
 
-	private static void PrettyPrint(object? obj)
-	{
-		Console.WriteLine(
-			JsonSerializer.Serialize(obj, new JsonSerializerOptions
-			{
-				WriteIndented = true
-			})
-		);
-	}
+public enum ResultType
+{
+	Single,
+	Multiple
 }
 
 public class BookType : ObjectType<Book>
@@ -129,26 +150,36 @@ public class BookType : ObjectType<Book>
 		// 	.Computed(() => "Foo Bar");
 
 		descriptor.Field(a => a.Title)
-			.Auth();
+			.Auth(b => b.Title.StartsWith("Foo"));
 	}
 }
-
 
 public static class ObjectFieldDescriptorExtensions
 {
 	public static IObjectFieldDescriptor Auth(
-		this IObjectFieldDescriptor descriptor
+		this IObjectFieldDescriptor descriptor,
+		Expression<Func<Book, bool>> ruleExpr
 	)
 	{
+		AuthRule<Book> rule = new(ruleExpr);
 		descriptor.Extend().OnBeforeCreate(d =>
 		{
-			// https://github.com/ChilliCream/graphql-platform/blob/6e9b7a9936f36f300903b764c0a3d39d5e67347a/src/HotChocolate/Data/src/Data/Projections/Extensions/ProjectionObjectFieldDescriptorExtensions.cs#L52
-			Expression<Func<Book, bool>> expr = b => b.Title.StartsWith("Hello");
-			d.ContextData[Query.AuthContextKey] = new[] { expr };
+			if (d.ContextData.GetValueOrDefault(Query.AuthContextKey) is List<AuthRule<Book>> authRules)
+				authRules.Add(rule);
+			else
+				d.ContextData[Query.AuthContextKey] = new List<AuthRule<Book>> { rule };
 		});
-		// descriptor.Type(typeof(TValue));
-		// descriptor.Resolve(ctx => expr.Compile().Invoke());
+		descriptor.Use(next => async context =>
+		{
+			await next(context);
+			// TODO: Check the results
+		});
 
 		return descriptor;
 	}
 }
+
+public record AuthRule<T>(
+	Expression<Func<T, bool>> Rule,
+	Func<ISelection, bool>? ShouldApply = null
+);
