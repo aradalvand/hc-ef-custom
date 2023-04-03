@@ -37,17 +37,25 @@ public class CustomProjectionMiddleware
 
 		var type = (IObjectType)context.Selection.Type.NamedType();
 		var topLevelSelections = context.GetSelections(type);
-		var param = Expression.Parameter(typeDict[type.RuntimeType]);
-		List<MemberAssignment> Project(IEnumerable<ISelection> selections, Expression on)
+
+		MemberInitExpression Project(
+			IEnumerable<ISelection> selections,
+			Expression sourceExpr
+		)
 		{
-			var assignments = new List<MemberAssignment>();
-			var metaExprs = new Dictionary<string, LambdaExpression>();
+			List<MemberAssignment> assignments = new();
+			Dictionary<string, Expression>? metaExprs = null;
+
+			var dtoType = selections.First().Field.DeclaringType.RuntimeType;
+			Console.WriteLine($"dtoType: {dtoType}");
+			var entityType = typeDict[dtoType];
+			Console.WriteLine($"entityType: {entityType}");
+
 			foreach (var selection in selections)
 			{
 				var dtoProperty = (PropertyInfo)selection.Field.Member!;
-				var entityType = typeDict[selection.Field.DeclaringType.RuntimeType];
 				var entityProperty = entityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
-				var entityPropertyAccess = Expression.Property(on, entityProperty);
+				var entityPropertyAccess = Expression.Property(sourceExpr, entityProperty);
 
 				if (selection.Type.IsLeafType())
 				{
@@ -62,10 +70,7 @@ public class CustomProjectionMiddleware
 					{
 						var e = typeDict[objectType.RuntimeType];
 						var param = Expression.Parameter(e);
-						var init = Expression.MemberInit(
-							Expression.New(objectType.RuntimeType),
-							Project(innerSelections, param)
-						);
+						var init = Project(innerSelections, param);
 						var lambda = Expression.Lambda(init, param);
 						var select = Expression.Call( // NOTE: https://stackoverflow.com/a/51896729
 							typeof(Enumerable),
@@ -77,52 +82,51 @@ public class CustomProjectionMiddleware
 					}
 					else
 					{
-						var memberInit = Expression.MemberInit(
-							Expression.New(objectType.RuntimeType),
-							Project(innerSelections, entityPropertyAccess)
-						);
+						var memberInit = Project(innerSelections, entityPropertyAccess);
 						assignments.Add(Expression.Bind(dtoProperty, memberInit));
 					}
 				}
 
 				if (selection.Field.ContextData.GetValueOrDefault(MetaContextKey) is IEnumerable<AuthRule> authRules)
 				{
-					foreach (var rule in authRules)
-						metaExprs.Add(rule.Key, rule.Rule);
+					metaExprs = authRules.ToDictionary(
+						r => r.Key,
+						r => ReplacingExpressionVisitor.Replace(
+							r.Rule.Parameters.First(), // NOTE: We assume there's only one parameter
+							sourceExpr,
+							r.Rule.Body
+						)
+					);
 				}
 			}
 
-			if (metaExprs.Any())
+			if (metaExprs is not null)
 			{
 				var dictType = typeof(Dictionary<string, bool>);
 				var dictInit = Expression.ListInit(
 					Expression.New(dictType),
 					metaExprs.Select(ex => Expression.ElementInit(
 						dictType.GetMethod("Add")!,
-						Expression.Constant(ex.Key),
-						ReplacingExpressionVisitor.Replace(
-							ex.Value.Parameters.First(),
-							param,
-							ex.Value.Body
-						)
+						Expression.Constant(ex.Key), ex.Value
 					))
 				);
 				assignments.Add(Expression.Bind(
-					typeof(BookDto).GetProperty(nameof(BaseDto._Meta))!,
+					dtoType.GetProperty(nameof(BaseDto._Meta))!,
 					dictInit
 				));
 			}
 
-			return assignments;
+			return Expression.MemberInit(
+				Expression.New(dtoType),
+				assignments
+			);
 		}
 
 		// TODO: Add null checks (for to-one relations) and inheritance checks
 
-		var dtoMemberInit = Expression.MemberInit(
-			Expression.New(type.RuntimeType),
-			Project(topLevelSelections, param)
-		);
-		var lambda = Expression.Lambda<Func<Book, BookDto>>(dtoMemberInit, param);
+		var param = Expression.Parameter(typeDict[type.RuntimeType]);
+		var body = Project(topLevelSelections, param);
+		var lambda = Expression.Lambda<Func<Book, BookDto>>(body, param);
 
 		Console.ForegroundColor = ConsoleColor.Cyan;
 		Console.WriteLine($"EXPRESSION: {lambda.ToReadableString()}");
