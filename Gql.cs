@@ -18,12 +18,16 @@ public class ProjectionResult<T>
 [QueryType]
 public static class Query
 {
-	[UseCustomProjection(ResultType.Single)]
+	[UseCustomProjection<BookType>(ResultType.Single)]
 	public static IQueryable<Book?> GetBook(AppDbContext db, int id) =>
 		db.Books.Where(b => b.Id == id);
+
+	[UseCustomProjection<AuthorType>(ResultType.Single)]
+	public static IQueryable<Author?> GetAuthor(AppDbContext db, int id) =>
+		db.Authors.Where(a => a.Id == id);
 }
 
-public class UseCustomProjection : ObjectFieldDescriptorAttribute
+public class UseCustomProjection<T> : ObjectFieldDescriptorAttribute where T : class, IOutputType
 {
 	private ResultType _resultType;
 	public UseCustomProjection(ResultType resultType, [CallerLineNumber] int order = 0)
@@ -38,7 +42,7 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 		MemberInfo member
 	)
 	{
-		descriptor.Type<BookType>();
+		descriptor.Type<T>();
 		descriptor.Extend().OnBeforeCreate((context, definition) =>
 		{
 			// https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
@@ -84,6 +88,7 @@ public class AuthorDto : BaseDto
 	public string FirstName { get; init; } = default!;
 	public string LastName { get; init; } = default!;
 	public string FullName { get; init; } = default!;
+	public IEnumerable<BookDto> Books { get; init; } = default!;
 }
 public class BookRatingDto : BaseDto
 {
@@ -101,6 +106,12 @@ public class BookType : ObjectType<BookDto>
 	{
 		descriptor.Field(b => b.Title)
 			.Auth(b => b.Title.StartsWith("Foo"));
+	}
+}
+public class AuthorType : ObjectType<AuthorDto>
+{
+	protected override void Configure(IObjectTypeDescriptor<AuthorDto> descriptor)
+	{
 	}
 }
 
@@ -123,11 +134,11 @@ public static class ObjectFieldDescriptorExtensions
 		descriptor.Use(next => async context =>
 		{
 			await next(context);
-			// var result = context.Parent<BookDto>()._Meta[key];
-			// if (result)
-			// 	Console.WriteLine("Permitted.");
-			// else
-			// 	Console.WriteLine("Not permitted.");
+			var result = context.Parent<BookDto>()._Meta[key];
+			if (result)
+				Console.WriteLine("Permitted.");
+			else
+				Console.WriteLine("Not permitted.");
 		});
 
 		return descriptor;
@@ -136,6 +147,6 @@ public static class ObjectFieldDescriptorExtensions
 
 public record AuthRule(
 	string Key,
-	Expression<Func<Book, bool>> Rule,
+	LambdaExpression Expression,
 	Func<ISelection, bool>? ShouldApply = null
 );
