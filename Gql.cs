@@ -46,22 +46,69 @@ public static class QueryableExtensions
 		ResultType resultType
 	)
 	{
+		Dictionary<Type, Type> typeDict = new()
+		{
+			[typeof(BookDto)] = typeof(Book),
+			[typeof(AuthorDto)] = typeof(Author),
+			[typeof(BookRatingDto)] = typeof(BookRating),
+		};
+		List<MemberAssignment> Method(IEnumerable<ISelection> selections, Expression on)
+		{
+			var assignments = new List<MemberAssignment>();
+			foreach (var selection in selections)
+			{
+				var dtoProperty = (PropertyInfo)selection.Field.Member!;
+				var entityType = typeDict[selection.Field.DeclaringType.RuntimeType];
+				var entityProperty = entityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
+				var entityPropertyAccess = Expression.Property(on, entityProperty);
+
+				if (selection.Type.IsLeafType())
+				{
+					assignments.Add(Expression.Bind(dtoProperty, entityPropertyAccess));
+				}
+				else
+				{
+					var objectType = (IObjectType)selection.Type.NamedType();
+					var innerSelections = context.GetSelections(objectType, selection);
+
+					if (selection.Type.IsListType())
+					{
+						var e = typeDict[objectType.RuntimeType];
+						var param = Expression.Parameter(e);
+						var init = Expression.MemberInit(
+							Expression.New(objectType.RuntimeType),
+							Method(innerSelections, param)
+						);
+						var lambda = Expression.Lambda(init, param);
+						var select = Expression.Call( // NOTE: https://stackoverflow.com/a/51896729
+							typeof(Enumerable),
+							nameof(Enumerable.Select),
+							new Type[] { e, lambda.Body.Type },
+							entityPropertyAccess, lambda // NOTE: `propertyExpr` here is what gets passed to `Select` as its `this` argument, and `lambda` is the lambda that gets passed to it.
+						);
+						assignments.Add(Expression.Bind(dtoProperty, select));
+					}
+					else
+					{
+						var memberInit = Expression.MemberInit(
+							Expression.New(objectType.RuntimeType),
+							Method(innerSelections, entityPropertyAccess)
+						);
+						assignments.Add(Expression.Bind(dtoProperty, memberInit));
+					}
+				}
+			}
+			return assignments;
+		}
+
+		// TODO: The auth rules could be "deep", so we can't just designate a dictionary on the top-level for them. We probably have to use a "Tuple" either the built-in type or a special type, that holds both the actual object result, and the auth rules.
+		// TODO: Add null checks (for to-one relations) and inheritance checks
+
 		var type = (IObjectType)context.Selection.Type.NamedType();
 		var topLevelSelections = context.GetSelections(type);
 
 		var param = Expression.Parameter(typeof(Book));
-
-		var assignments = new List<MemberAssignment>();
-		foreach (var selection in topLevelSelections)
-		{
-			var dtoProperty = (PropertyInfo)selection.Field.Member!;
-			var entityProperty = typeof(Book).GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
-			var entityPropertyAccess = Expression.Property(param, entityProperty);
-			var assignment = Expression.Bind(dtoProperty, entityPropertyAccess);
-			assignments.Add(assignment);
-		}
-		var dtoMemberInit = Expression.MemberInit(Expression.New(typeof(BookDto)), assignments);
-
+		var dtoMemberInit = Expression.MemberInit(Expression.New(typeof(BookDto)), Method(topLevelSelections, param));
 		var lambda = Expression.Lambda(dtoMemberInit, param);
 
 		Console.WriteLine("----------");
@@ -186,6 +233,18 @@ public class BookDto
 {
 	public int Id { get; init; } = default!;
 	public string Title { get; init; } = default!;
+	public AuthorDto Author { get; init; } = default!;
+	public IEnumerable<BookRatingDto> Ratings { get; init; } = default!;
+}
+public class AuthorDto
+{
+	public int Id { get; init; } = default!;
+	public string FullName { get; init; } = default!;
+}
+public class BookRatingDto
+{
+	public int Id { get; init; } = default!;
+	public byte Rating { get; init; } = default!;
 }
 // public record BookDto(
 // 	int Id = default!,
