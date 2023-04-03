@@ -43,9 +43,10 @@ public class CustomProjectionMiddleware
 	public async Task Invoke(IMiddlewareContext context)
 	{
 		await _next(context);
-		Console.WriteLine($"CustomProjectionMiddleware - context.Result: {context.Result}");
-		if (context.Result is not IQueryable<Book> query)
+		if (context.Result is not IQueryable<object> query)
 			throw new InvalidOperationException();
+
+		Console.WriteLine($"query.ElementType: {query.ElementType}");
 
 		Dictionary<Type, Type> typeDict = new()
 		{
@@ -53,7 +54,7 @@ public class CustomProjectionMiddleware
 			[typeof(AuthorDto)] = typeof(Author),
 			[typeof(BookRatingDto)] = typeof(BookRating),
 		};
-		List<MemberAssignment> Method(IEnumerable<ISelection> selections, Expression on)
+		List<MemberAssignment> Project(IEnumerable<ISelection> selections, Expression on)
 		{
 			var assignments = new List<MemberAssignment>();
 			foreach (var selection in selections)
@@ -78,7 +79,7 @@ public class CustomProjectionMiddleware
 						var param = Expression.Parameter(e);
 						var init = Expression.MemberInit(
 							Expression.New(objectType.RuntimeType),
-							Method(innerSelections, param)
+							Project(innerSelections, param)
 						);
 						var lambda = Expression.Lambda(init, param);
 						var select = Expression.Call( // NOTE: https://stackoverflow.com/a/51896729
@@ -93,7 +94,7 @@ public class CustomProjectionMiddleware
 					{
 						var memberInit = Expression.MemberInit(
 							Expression.New(objectType.RuntimeType),
-							Method(innerSelections, entityPropertyAccess)
+							Project(innerSelections, entityPropertyAccess)
 						);
 						assignments.Add(Expression.Bind(dtoProperty, memberInit));
 					}
@@ -102,21 +103,22 @@ public class CustomProjectionMiddleware
 			return assignments;
 		}
 
-		// TODO: The auth rules could be "deep", so we can't just designate a dictionary on the top-level for them. We probably have to use a "Tuple" either the built-in type or a special type, that holds both the actual object result, and the auth rules.
+		// TODO: The auth rules could be "deep", so we can't just designate a dictionary on the top-level for them. We probably have to use a "Tuple" either the built-in type or a special type, that holds both the actual object result, and the auth rules. Dictionary/new type
 		// TODO: Add null checks (for to-one relations) and inheritance checks
 
 		var type = (IObjectType)context.Selection.Type.NamedType();
 		var topLevelSelections = context.GetSelections(type);
-
-		var param = Expression.Parameter(typeof(Book));
-		var dtoMemberInit = Expression.MemberInit(Expression.New(typeof(BookDto)), Method(topLevelSelections, param));
+		var param = Expression.Parameter(typeDict[type.RuntimeType]);
+		var dtoMemberInit = Expression.MemberInit(
+			Expression.New(type.RuntimeType),
+			Project(topLevelSelections, param)
+		);
 		var lambda = Expression.Lambda(dtoMemberInit, param);
-
 
 		Console.ForegroundColor = ConsoleColor.Cyan;
 		Console.WriteLine($"EXPRESSION: {lambda.ToReadableString()}");
 
-		var result = await query.Select((Expression<Func<Book, BookDto>>)lambda).FirstOrDefaultAsync();
+		var result = await query.FirstOrDefaultAsync();
 
 		Console.ForegroundColor = ConsoleColor.Yellow;
 		Console.WriteLine($"RESULT: {JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })}");
@@ -143,12 +145,15 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 		MemberInfo member
 	)
 	{
-		descriptor.Type<BookType>();
 		descriptor.Extend().OnBeforeCreate((context, definition) =>
 		{
-			Console.WriteLine($"definition.Type: {definition.Type}");
-			Console.WriteLine($"definition.SourceType: {definition.SourceType}");
-			Console.WriteLine($"definition.ResultType: {definition.ResultType}");
+			// https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
+			var typeInfo = context.TypeInspector.CreateTypeInfo(definition.ResultType!);
+			Console.WriteLine($"typeInfo: {typeInfo}");
+
+			var typeRef = context.TypeInspector.GetTypeRef(typeInfo.NamedType, TypeContext.Output);
+			Console.WriteLine($"typeRef: {typeRef}");
+			definition.Type = typeRef;
 		});
 		descriptor.Use<CustomProjectionMiddleware>();
 	}
