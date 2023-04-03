@@ -63,6 +63,27 @@ Compiling a query which loads related collections for more than one collection n
 
 At the same time as building the projection expression, we need to also build a separate expression (which will then compile into a delegate and call) that takes that array, and converts it into the DTO type. It would be lambda expression, whose body is a member initialization expression.
 
+Example:
+
+```csharp
+book => new[]
+{
+    book.Title,
+    book.Author.FirstName
+}
+```
+
+```csharp
+resultArr => new BookDto
+{
+	Title = (string)resultArr[0],
+	Author = new AuthorDto
+	{
+		FirstName = (string)resultArr[1],
+	},
+};
+```
+
 ## - The (only) dictionary approach:
 
 ## - The runtime derived type creation approach
