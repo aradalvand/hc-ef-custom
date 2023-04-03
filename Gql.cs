@@ -123,11 +123,11 @@ public static class ObjectFieldDescriptorExtensions
 		descriptor.Use(next => async context =>
 		{
 			await next(context);
-			var result = context.Parent<BookDto>()._Meta[key];
-			if (result)
-				Console.WriteLine("Permitted.");
-			else
-				Console.WriteLine("Not permitted.");
+			// var result = context.Parent<BookDto>()._Meta[key];
+			// if (result)
+			// 	Console.WriteLine("Permitted.");
+			// else
+			// 	Console.WriteLine("Not permitted.");
 		});
 
 		return descriptor;
