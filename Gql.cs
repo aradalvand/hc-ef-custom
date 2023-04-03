@@ -49,7 +49,7 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 			// Console.WriteLine($"typeRef: {typeRef}");
 			// definition.Type = typeRef;
 		});
-		descriptor.Use<CustomProjectionMiddleware>();
+		descriptor.Use((_, next) => new CustomProjectionMiddleware(next, _resultType));
 	}
 }
 
