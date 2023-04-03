@@ -37,6 +37,24 @@ public class CustomProjectionMiddleware
 		if (context.Result is not IQueryable<object> query)
 			throw new InvalidOperationException();
 
+		query = query.Provider.CreateQuery<object>(
+			Project(query.Expression, context.Selection)
+		);
+
+		context.Result = _resultType switch
+		{
+			ResultType.Single => await query.FirstOrDefaultAsync(),
+			ResultType.Multiple => await query.ToListAsync(),
+			_ => throw new ArgumentOutOfRangeException(),
+		};
+
+		Console.ForegroundColor = ConsoleColor.Cyan;
+		Console.WriteLine(query.Expression.ToReadableString());
+		Console.ForegroundColor = ConsoleColor.Green;
+		Console.WriteLine(JsonSerializer.Serialize(context.Result, new JsonSerializerOptions { WriteIndented = true }));
+		Console.ResetColor();
+		Console.WriteLine("----------");
+
 		Expression Project(Expression sourceExpression, ISelection selection)
 		{
 			var objectType = (IObjectType)selection.Type.NamedType();
@@ -124,21 +142,6 @@ public class CustomProjectionMiddleware
 			);
 			return memberInit;
 		}
-
-		query = query.Provider.CreateQuery<object>(Project(query.Expression, context.Selection));
-		context.Result = _resultType switch
-		{
-			ResultType.Single => await query.FirstOrDefaultAsync(),
-			ResultType.Multiple => await query.ToListAsync(),
-			_ => throw new ArgumentOutOfRangeException(),
-		};
-
-		Console.ForegroundColor = ConsoleColor.Cyan;
-		Console.WriteLine(query.Expression.ToReadableString());
-		Console.ForegroundColor = ConsoleColor.Green;
-		Console.WriteLine(JsonSerializer.Serialize(context.Result, new JsonSerializerOptions { WriteIndented = true }));
-		Console.ResetColor();
-		Console.WriteLine("----------");
 	}
 
 	// --- Private Helpers:

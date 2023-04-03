@@ -105,7 +105,7 @@ public class BookType : ObjectType<BookDto>
 	protected override void Configure(IObjectTypeDescriptor<BookDto> descriptor)
 	{
 		descriptor.Field(b => b.Title)
-			.Auth(b => b.Title.StartsWith("Foo"));
+			.Auth(b => b.Ratings.Any(r => r.Rating > 3));
 	}
 }
 public class AuthorType : ObjectType<AuthorDto>
