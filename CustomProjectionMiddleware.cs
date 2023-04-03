@@ -5,11 +5,14 @@ using AgileObjects.ReadableExpressions;
 using HotChocolate.Execution.Processing;
 using System.Text.Json;
 using hc_ef_custom.Types;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace hc_ef_custom;
 
 public class CustomProjectionMiddleware
 {
+	public const string MetaContextKey = "Meta";
+
 	private readonly FieldDelegate _next;
 
 	public CustomProjectionMiddleware(FieldDelegate next)
@@ -35,76 +38,10 @@ public class CustomProjectionMiddleware
 		var type = (IObjectType)context.Selection.Type.NamedType();
 		var topLevelSelections = context.GetSelections(type);
 		var param = Expression.Parameter(typeDict[type.RuntimeType]);
-
-		var matParam = Expression.Parameter(typeof(object[]));
-
-		var exprs = new List<Expression>();
-		var matExprs = new List<MemberBinding>();
-
-		int index = 0;
-		foreach (var selection in topLevelSelections)
+		List<MemberAssignment> Project(IEnumerable<ISelection> selections, Expression on)
 		{
-			var dtoProperty = (PropertyInfo)selection.Field.Member!;
-			var entityType = typeDict[selection.Field.DeclaringType.RuntimeType];
-			var entityProperty = entityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
-			var entityPropertyAccess = Expression.Property(param, entityProperty);
-			exprs.Add(Expression.Convert(entityPropertyAccess, typeof(object)));
-			matExprs.Add(Expression.Bind(
-				dtoProperty,
-				Expression.Convert(
-					Expression.ArrayIndex(matParam, Expression.Constant(index)),
-					dtoProperty.PropertyType
-				)
-			));
-			index++;
-		}
-
-		var arrayInit = Expression.NewArrayInit(
-			typeof(object),
-			exprs
-		);
-		var lambda = Expression.Lambda(arrayInit, param);
-
-		Console.ForegroundColor = ConsoleColor.Cyan;
-		Console.WriteLine($"PROJECTION: {lambda.ToReadableString()}");
-
-		var dtoInit = Expression.MemberInit(
-			Expression.New(typeof(BookDto)),
-			matExprs
-		);
-		var matLambda = Expression.Lambda(dtoInit, matParam);
-		Console.ForegroundColor = ConsoleColor.Green;
-		Console.WriteLine($"MATERIALIZER: {matLambda.ToReadableString()}");
-
-		var result = await query.Select((Expression<Func<Book, object[]>>)lambda).FirstOrDefaultAsync();
-
-		Console.ForegroundColor = ConsoleColor.Yellow;
-		Console.WriteLine($"RESULT: {JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })}");
-		Console.ResetColor();
-
-		var mat = ((Expression<Func<object[], BookDto>>)matLambda).Compile();
-		context.Result = result is null ? null : mat(result);
-
-		Console.WriteLine("----------");
-	}
-
-	public async Task InvokeTemp(IMiddlewareContext context)
-	{
-		await _next(context);
-		if (context.Result is not IQueryable<Book> query)
-			throw new InvalidOperationException();
-
-		Console.WriteLine($"query.ElementType: {query.ElementType}");
-
-		Dictionary<Type, Type> typeDict = new()
-		{
-			[typeof(BookDto)] = typeof(Book),
-			[typeof(AuthorDto)] = typeof(Author),
-			[typeof(BookRatingDto)] = typeof(BookRating),
-		};
-		List<Expression> Project(IEnumerable<ISelection> selections, Expression on)
-		{
-			var exprs = new List<Expression>();
+			var assignments = new List<MemberAssignment>();
+			var metaExprs = new Dictionary<string, LambdaExpression>();
 			foreach (var selection in selections)
 			{
 				var dtoProperty = (PropertyInfo)selection.Field.Member!;
@@ -114,7 +51,7 @@ public class CustomProjectionMiddleware
 
 				if (selection.Type.IsLeafType())
 				{
-					exprs.Add(Expression.Convert(entityPropertyAccess, typeof(object)));
+					assignments.Add(Expression.Bind(dtoProperty, entityPropertyAccess));
 				}
 				else
 				{
@@ -125,8 +62,8 @@ public class CustomProjectionMiddleware
 					{
 						var e = typeDict[objectType.RuntimeType];
 						var param = Expression.Parameter(e);
-						var init = Expression.NewArrayInit(
-							typeof(object),
+						var init = Expression.MemberInit(
+							Expression.New(objectType.RuntimeType),
 							Project(innerSelections, param)
 						);
 						var lambda = Expression.Lambda(init, param);
@@ -136,44 +73,67 @@ public class CustomProjectionMiddleware
 							new Type[] { e, lambda.Body.Type },
 							entityPropertyAccess, lambda // NOTE: `propertyExpr` here is what gets passed to `Select` as its `this` argument, and `lambda` is the lambda that gets passed to it.
 						);
-						exprs.Add(select);
+						assignments.Add(Expression.Bind(dtoProperty, select));
 					}
 					else
 					{
-						// var memberInit = Expression.NewArrayInit(
-						// 	typeof(object),
-						// 	Project(innerSelections, entityPropertyAccess)
-						// );
-						// exprs.Add(memberInit);
-						exprs.AddRange(Project(innerSelections, entityPropertyAccess));
+						var memberInit = Expression.MemberInit(
+							Expression.New(objectType.RuntimeType),
+							Project(innerSelections, entityPropertyAccess)
+						);
+						assignments.Add(Expression.Bind(dtoProperty, memberInit));
 					}
 				}
+
+				if (selection.Field.ContextData.GetValueOrDefault(MetaContextKey) is IEnumerable<AuthRule> authRules)
+				{
+					foreach (var rule in authRules)
+						metaExprs.Add(rule.Key, rule.Rule);
+				}
 			}
-			return exprs;
+
+			if (metaExprs.Any())
+			{
+				var dictType = typeof(Dictionary<string, bool>);
+				var dictInit = Expression.ListInit(
+					Expression.New(dictType),
+					metaExprs.Select(ex => Expression.ElementInit(
+						dictType.GetMethod("Add")!,
+						Expression.Constant(ex.Key),
+						ReplacingExpressionVisitor.Replace(
+							ex.Value.Parameters.First(),
+							param,
+							ex.Value.Body
+						)
+					))
+				);
+				assignments.Add(Expression.Bind(
+					typeof(BookDto).GetProperty(nameof(BaseDto._Meta))!,
+					dictInit
+				));
+			}
+
+			return assignments;
 		}
 
-		// TODO: The auth rules could be "deep", so we can't just designate a dictionary on the top-level for them. We probably have to use a "Tuple" either the built-in type or a special type, that holds both the actual object result, and the auth rules. Dictionary/new type
 		// TODO: Add null checks (for to-one relations) and inheritance checks
 
-		var type = (IObjectType)context.Selection.Type.NamedType();
-		var topLevelSelections = context.GetSelections(type);
-		var param = Expression.Parameter(typeDict[type.RuntimeType]);
-		var dtoMemberInit = Expression.NewArrayInit(
-			typeof(object),
+		var dtoMemberInit = Expression.MemberInit(
+			Expression.New(type.RuntimeType),
 			Project(topLevelSelections, param)
 		);
-		var lambda = Expression.Lambda(dtoMemberInit, param);
+		var lambda = Expression.Lambda<Func<Book, BookDto>>(dtoMemberInit, param);
 
 		Console.ForegroundColor = ConsoleColor.Cyan;
 		Console.WriteLine($"EXPRESSION: {lambda.ToReadableString()}");
 
-		var result = await query.Select((Expression<Func<Book, object[]>>)lambda).FirstOrDefaultAsync();
+		var result = await query.Select(lambda).FirstOrDefaultAsync();
 
 		Console.ForegroundColor = ConsoleColor.Yellow;
 		Console.WriteLine($"RESULT: {JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })}");
 		Console.ResetColor();
 
-		context.Result = null;
+		context.Result = result;
 
 		Console.WriteLine("----------");
 	}

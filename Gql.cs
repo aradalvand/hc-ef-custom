@@ -4,6 +4,8 @@ using HotChocolate.Execution.Processing;
 using System.Runtime.CompilerServices;
 using HotChocolate.Types.Descriptors;
 using System.Text.Json;
+using System.Diagnostics;
+using System.ComponentModel;
 
 namespace hc_ef_custom.Types;
 
@@ -16,50 +18,9 @@ public class ProjectionResult<T>
 [QueryType]
 public static class Query
 {
-	public const string AuthContextKey = "Auth";
-
 	[UseCustomProjection(ResultType.Single)]
 	public static IQueryable<Book?> GetBook(AppDbContext db, int id) =>
 		db.Books.Where(b => b.Id == id);
-
-	public static async Task<Book?> GetBook2(AppDbContext db, int id)
-	{
-		var result = await db.Books
-			.Where(b => b.Id == id)
-			.Select(b => new ProjectionResult<BookDto>
-			{
-				Main = new()
-				{
-					Title = b.Title,
-					Ratings = b.Ratings.Select(r => new BookRatingDto
-					{
-						Rating = r.Rating,
-					}),
-				},
-				Auth = new()
-				{
-					{ "Title_StartsWithCrap",  b.Title.StartsWith("Crap") },
-					{ "Ratings", b.Ratings.Select(r => new Dictionary<string, object> {
-						{ "Rating_IsGreaterThan3", r.Rating > 3 }
-					}) }
-				},
-			})
-			.FirstOrDefaultAsync();
-		Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
-		return null;
-	}
-
-	// public static async Task<Author?> GetAuthor(
-	// 	AppDbContext db,
-	// 	IResolverContext context,
-	// 	int id
-	// )
-	// {
-	// 	await db.Authors.Where(b => b.Id == id)
-	// 		.ProjectCustom(context, ResultType.Single);
-
-	// 	return null;
-	// }
 }
 
 public class UseCustomProjection : ObjectFieldDescriptorAttribute
@@ -103,7 +64,13 @@ public enum ResultType
 // - No "materializing" logic
 // - We can directly return the result with no modification
 // - Inheritance checks and results would be easier
-public class BookDto
+public abstract class BaseDto
+{
+	[GraphQLIgnore]
+	[EditorBrowsable(EditorBrowsableState.Never)]
+	public IDictionary<string, bool> _Meta { get; init; } = default!;
+}
+public class BookDto : BaseDto
 {
 	public int Id { get; init; } = default!;
 	public string Title { get; init; } = default!;
@@ -111,14 +78,14 @@ public class BookDto
 	public AuthorDto Author { get; init; } = default!;
 	public IEnumerable<BookRatingDto> Ratings { get; init; } = default!;
 }
-public class AuthorDto
+public class AuthorDto : BaseDto
 {
 	public int Id { get; init; } = default!;
 	public string FirstName { get; init; } = default!;
 	public string LastName { get; init; } = default!;
 	public string FullName { get; init; } = default!;
 }
-public class BookRatingDto
+public class BookRatingDto : BaseDto
 {
 	public int Id { get; init; } = default!;
 	public byte Rating { get; init; } = default!;
@@ -132,13 +99,7 @@ public class BookType : ObjectType<BookDto>
 {
 	protected override void Configure(IObjectTypeDescriptor<BookDto> descriptor)
 	{
-		// descriptor.Ignore();
-
-		// descriptor.Field("fullName")
-		// 	.Type<NonNullType<StringType>>()
-		// 	.Computed(() => "Foo Bar");
-
-		descriptor.Field(a => a.Title)
+		descriptor.Field(b => b.Title)
 			.Auth(b => b.Title.StartsWith("Foo"));
 	}
 }
@@ -150,25 +111,31 @@ public static class ObjectFieldDescriptorExtensions
 		Expression<Func<Book, bool>> ruleExpr
 	)
 	{
-		AuthRule<Book> rule = new(ruleExpr);
+		const string key = "Foo";
+		AuthRule rule = new(key, ruleExpr);
 		descriptor.Extend().OnBeforeCreate(d =>
 		{
-			if (d.ContextData.GetValueOrDefault(Query.AuthContextKey) is List<AuthRule<Book>> authRules)
+			if (d.ContextData.GetValueOrDefault(CustomProjectionMiddleware.MetaContextKey) is List<AuthRule> authRules)
 				authRules.Add(rule);
 			else
-				d.ContextData[Query.AuthContextKey] = new List<AuthRule<Book>> { rule };
+				d.ContextData[CustomProjectionMiddleware.MetaContextKey] = new List<AuthRule> { rule };
 		});
 		descriptor.Use(next => async context =>
 		{
 			await next(context);
-			// TODO: Check the results
+			var result = context.Parent<BookDto>()._Meta[key];
+			if (result)
+				Console.WriteLine("Permitted.");
+			else
+				Console.WriteLine("Not permitted.");
 		});
 
 		return descriptor;
 	}
 }
 
-public record AuthRule<T>(
-	Expression<Func<T, bool>> Rule,
+public record AuthRule(
+	string Key,
+	Expression<Func<Book, bool>> Rule,
 	Func<ISelection, bool>? ShouldApply = null
 );
