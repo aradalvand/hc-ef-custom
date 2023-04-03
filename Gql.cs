@@ -1,12 +1,11 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
-using System.Reflection.Emit;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using HotChocolate.Resolvers;
 using AgileObjects.ReadableExpressions;
-using Microsoft.EntityFrameworkCore.Query;
 using HotChocolate.Execution.Processing;
+using System.Runtime.CompilerServices;
+using HotChocolate.Types.Descriptors;
+using System.Text.Json;
 
 namespace hc_ef_custom.Types;
 
@@ -15,37 +14,39 @@ public static class Query
 {
 	public const string AuthContextKey = "Auth";
 
-	public static async Task<BookDto?> GetBook(
-		AppDbContext db,
-		IResolverContext context,
-		int id
-	)
-	{
-		return await db.Books.Where(b => b.Id == id)
-			.ProjectCustom2(context, ResultType.Single);
-	}
+	[UseCustomProjection(ResultType.Single)]
+	public static IQueryable<Book?> GetBook(AppDbContext db, int id) =>
+		db.Books.Where(b => b.Id == id);
 
-	public static async Task<Author?> GetAuthor(
-		AppDbContext db,
-		IResolverContext context,
-		int id
-	)
-	{
-		await db.Authors.Where(b => b.Id == id)
-			.ProjectCustom(context, ResultType.Single);
+	// public static async Task<Author?> GetAuthor(
+	// 	AppDbContext db,
+	// 	IResolverContext context,
+	// 	int id
+	// )
+	// {
+	// 	await db.Authors.Where(b => b.Id == id)
+	// 		.ProjectCustom(context, ResultType.Single);
 
-		return null;
-	}
+	// 	return null;
+	// }
 }
 
-public static class QueryableExtensions
+public class CustomProjectionMiddleware
 {
-	public static async Task<BookDto?> ProjectCustom2(
-		this IQueryable<Book> query,
-		IResolverContext context,
-		ResultType resultType
-	)
+	private readonly FieldDelegate _next;
+
+	public CustomProjectionMiddleware(FieldDelegate next)
 	{
+		_next = next;
+	}
+
+	public async Task Invoke(IMiddlewareContext context)
+	{
+		await _next(context);
+		Console.WriteLine($"CustomProjectionMiddleware - context.Result: {context.Result}");
+		if (context.Result is not IQueryable<Book> query)
+			throw new InvalidOperationException();
+
 		Dictionary<Type, Type> typeDict = new()
 		{
 			[typeof(BookDto)] = typeof(Book),
@@ -111,110 +112,45 @@ public static class QueryableExtensions
 		var dtoMemberInit = Expression.MemberInit(Expression.New(typeof(BookDto)), Method(topLevelSelections, param));
 		var lambda = Expression.Lambda(dtoMemberInit, param);
 
-		Console.WriteLine("----------");
 
 		Console.ForegroundColor = ConsoleColor.Cyan;
 		Console.WriteLine($"EXPRESSION: {lambda.ToReadableString()}");
 
-		var result = await query
-			.Select((Expression<Func<Book, BookDto>>)lambda)
-			.FirstOrDefaultAsync();
+		var result = await query.Select((Expression<Func<Book, BookDto>>)lambda).FirstOrDefaultAsync();
 
 		Console.ForegroundColor = ConsoleColor.Yellow;
 		Console.WriteLine($"RESULT: {JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })}");
 		Console.ResetColor();
 
-		return result;
+		context.Result = result;
+
+		Console.WriteLine("----------");
+	}
+}
+
+public class UseCustomProjection : ObjectFieldDescriptorAttribute
+{
+	private ResultType _resultType;
+	public UseCustomProjection(ResultType resultType, [CallerLineNumber] int order = 0)
+	{
+		_resultType = resultType;
+		Order = order;
 	}
 
-	public static async Task ProjectCustom<T>(
-		this IQueryable<T> query,
-		IResolverContext context,
-		ResultType resultType
+	protected override void OnConfigure(
+		IDescriptorContext context,
+		IObjectFieldDescriptor descriptor,
+		MemberInfo member
 	)
 	{
-		var topSelection = context.GetSelections((IObjectType)context.Selection.Type.NamedType());
-		var param = Expression.Parameter(typeof(T));
-
-		IEnumerable<Expression> Project(IEnumerable<ISelection> selections, Expression on)
+		descriptor.Type<BookType>();
+		descriptor.Extend().OnBeforeCreate((context, definition) =>
 		{
-			var expressions = new List<Expression>();
-
-			foreach (var selection in selections)
-			{
-				var property = (PropertyInfo)selection.Field.Member!;
-				var propertyExpr = Expression.Property(
-					on,
-					property
-				);
-
-				if (selection.SelectionSet is null)
-				{
-					expressions.Add(propertyExpr);
-				}
-				else
-				{
-					var objectType = (IObjectType)selection.Type.NamedType();
-					var innerSelections = context.GetSelections(
-						objectType,
-						selection
-					);
-					if (selection.Type.IsListType())
-					{
-						// TODO: Duplicated outside
-						var param = Expression.Parameter(objectType.RuntimeType);
-						var arrayInit = Expression.NewArrayInit(
-							typeof(object),
-							Project(innerSelections, param).Select(e => Expression.Convert(e, typeof(object)))
-						);
-						var lambda = Expression.Lambda(arrayInit, param);
-						var select = Expression.Call( // NOTE: https://stackoverflow.com/a/51896729
-							typeof(Enumerable),
-							nameof(Enumerable.Select),
-							new Type[] { objectType.RuntimeType, lambda.Body.Type },
-							propertyExpr, lambda // NOTE: `propertyExpr` here is what gets passed to `Select` as its `this` argument, and `lambda` is the lambda that gets passed to it.
-						);
-						expressions.Add(select);
-					}
-					else
-					{
-						expressions.AddRange(Project(innerSelections, propertyExpr));
-					}
-				}
-
-				if (selection.Field.ContextData.GetValueOrDefault(Query.AuthContextKey) is IEnumerable<AuthRule<T>> authRules)
-				{
-					foreach (var (rule, _) in authRules.Where(r => r.ShouldApply?.Invoke(selection) ?? true))
-					{
-						expressions.Add(ReplacingExpressionVisitor.Replace(
-							rule.Parameters.First(),
-							param,
-							rule.Body
-						));
-					}
-				}
-			}
-
-			return expressions;
-		}
-
-		var arrayNew = Expression.NewArrayInit(
-			typeof(object),
-			Project(topSelection, param).Select(e => Expression.Convert(e, typeof(object))) // NOTE: Necessary — see https://stackoverflow.com/a/2200247/7734384
-		);
-		var lambda = (Expression<Func<T, object[]>>)Expression.Lambda(arrayNew, param);
-
-		Console.ForegroundColor = ConsoleColor.Cyan;
-		Console.WriteLine($"EXPRESSION: {lambda.ToReadableString()}");
-
-		var selectedQuery = query.Select(lambda);
-		var result = await selectedQuery.FirstOrDefaultAsync();
-
-		Console.ForegroundColor = ConsoleColor.Yellow;
-		Console.WriteLine($"RESULT: {JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })}");
-		Console.ResetColor();
-
-		Console.WriteLine("----------");
+			Console.WriteLine($"definition.Type: {definition.Type}");
+			Console.WriteLine($"definition.SourceType: {definition.SourceType}");
+			Console.WriteLine($"definition.ResultType: {definition.ResultType}");
+		});
+		descriptor.Use<CustomProjectionMiddleware>();
 	}
 }
 
