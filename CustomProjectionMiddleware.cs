@@ -67,13 +67,26 @@ public class CustomProjectionMiddleware
 				var entityProperty = entityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
 				var entityPropertyAccess = Expression.Property(sourceExpression, entityProperty);
 
-				var assignment = Expression.Bind(
-					dtoProperty,
-					subSelection.Type.IsLeafType()
-						? entityPropertyAccess
-						: Project(entityPropertyAccess, subSelection)
-				);
-				assignments.Add(assignment);
+				if (subSelection.Type.IsLeafType())
+				{
+					var assignment = Expression.Bind(dtoProperty, entityPropertyAccess);
+					assignments.Add(assignment);
+				}
+				else
+				{
+					var subProjection = Project(entityPropertyAccess, subSelection);
+					var assignment = Expression.Bind(
+						dtoProperty,
+						IsNullable(entityProperty) // NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
+							? Expression.Condition(
+								Expression.Equal(entityPropertyAccess, Expression.Constant(null)),
+								Expression.Constant(null, subProjection.Type), // NOTE: We have to pass the type
+								subProjection
+							)
+							: subProjection
+					);
+					assignments.Add(assignment);
+				}
 
 				if (subSelection.Field.ContextData.GetValueOrDefault(MetaContextKey) is not IEnumerable<AuthRule> authRules)
 					continue;
@@ -96,7 +109,7 @@ public class CustomProjectionMiddleware
 				var dictInit = Expression.ListInit(
 					Expression.New(dictType),
 					metaExpressions.Select(ex => Expression.ElementInit(
-						dictType.GetMethod("Add")!,
+						dictType.GetMethod(nameof(Dictionary<string, bool>.Add))!,
 						Expression.Constant(ex.Key), ex.Value
 					))
 				);
