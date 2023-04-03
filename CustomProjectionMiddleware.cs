@@ -15,6 +15,13 @@ public class CustomProjectionMiddleware
 
 	private readonly FieldDelegate _next;
 
+	private Dictionary<Type, Type> _typeDict = new() // TEMP
+	{
+		[typeof(BookDto)] = typeof(Book),
+		[typeof(AuthorDto)] = typeof(Author),
+		[typeof(BookRatingDto)] = typeof(BookRating),
+	};
+
 	public CustomProjectionMiddleware(FieldDelegate next)
 	{
 		_next = next;
@@ -23,33 +30,21 @@ public class CustomProjectionMiddleware
 	public async Task Invoke(IMiddlewareContext context)
 	{
 		await _next(context);
+
 		if (context.Result is not IQueryable<Book> query)
 			throw new InvalidOperationException();
-
-		Console.WriteLine($"query.ElementType: {query.ElementType}");
-
-		Dictionary<Type, Type> typeDict = new()
-		{
-			[typeof(BookDto)] = typeof(Book),
-			[typeof(AuthorDto)] = typeof(Author),
-			[typeof(BookRatingDto)] = typeof(BookRating),
-		};
-
-		var type = (IObjectType)context.Selection.Type.NamedType();
-		var topLevelSelections = context.GetSelections(type);
 
 		MemberInitExpression Project(
 			IEnumerable<ISelection> selections,
 			Expression sourceExpr
 		)
 		{
+			// TODO: Implement support for inheritance
 			List<MemberAssignment> assignments = new();
 			Dictionary<string, Expression>? metaExprs = null;
 
 			var dtoType = selections.First().Field.DeclaringType.RuntimeType;
-			Console.WriteLine($"dtoType: {dtoType}");
-			var entityType = typeDict[dtoType];
-			Console.WriteLine($"entityType: {entityType}");
+			var entityType = _typeDict[dtoType];
 
 			foreach (var selection in selections)
 			{
@@ -68,7 +63,7 @@ public class CustomProjectionMiddleware
 
 					if (selection.Type.IsListType())
 					{
-						var e = typeDict[objectType.RuntimeType];
+						var e = _typeDict[objectType.RuntimeType];
 						var param = Expression.Parameter(e);
 						var init = Project(innerSelections, param);
 						var lambda = Expression.Lambda(init, param);
@@ -76,27 +71,36 @@ public class CustomProjectionMiddleware
 							typeof(Enumerable),
 							nameof(Enumerable.Select),
 							new Type[] { e, lambda.Body.Type },
-							entityPropertyAccess, lambda // NOTE: `propertyExpr` here is what gets passed to `Select` as its `this` argument, and `lambda` is the lambda that gets passed to it.
+							entityPropertyAccess, lambda // NOTE: `entityPropertyAccess` here is what gets passed to `Select` as its `this IEnumerable` parameter, and `lambda` is the lambda that gets passed to it.
 						);
 						assignments.Add(Expression.Bind(dtoProperty, select));
 					}
 					else
 					{
 						var memberInit = Project(innerSelections, entityPropertyAccess);
-						assignments.Add(Expression.Bind(dtoProperty, memberInit));
+						Expression expr = IsNullable(entityProperty) // NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
+							? Expression.Condition(
+								Expression.Equal(entityPropertyAccess, Expression.Constant(null)),
+								Expression.Constant(null, objectType.RuntimeType), // NOTE: We have to pass the type
+								memberInit
+							)
+							: memberInit;
+						assignments.Add(Expression.Bind(dtoProperty, expr));
 					}
 				}
 
 				if (selection.Field.ContextData.GetValueOrDefault(MetaContextKey) is IEnumerable<AuthRule> authRules)
 				{
-					metaExprs = authRules.ToDictionary(
-						r => r.Key,
-						r => ReplacingExpressionVisitor.Replace(
-							r.Rule.Parameters.First(), // NOTE: We assume there's only one parameter
-							sourceExpr,
-							r.Rule.Body
-						)
-					);
+					metaExprs = authRules
+						.Where(r => r.ShouldApply?.Invoke(selection) ?? true)
+						.ToDictionary(
+							r => r.Key,
+							r => ReplacingExpressionVisitor.Replace(
+								r.Rule.Parameters.First(), // NOTE: We assume there's only one parameter
+								sourceExpr,
+								r.Rule.Body
+							)
+						);
 				}
 			}
 
@@ -122,9 +126,9 @@ public class CustomProjectionMiddleware
 			);
 		}
 
-		// TODO: Add null checks (for to-one relations) and inheritance checks
-
-		var param = Expression.Parameter(typeDict[type.RuntimeType]);
+		var type = (IObjectType)context.Selection.Type.NamedType();
+		var topLevelSelections = context.GetSelections(type);
+		var param = Expression.Parameter(_typeDict[type.RuntimeType]);
 		var body = Project(topLevelSelections, param);
 		var lambda = Expression.Lambda<Func<Book, BookDto>>(body, param);
 
@@ -141,4 +145,9 @@ public class CustomProjectionMiddleware
 
 		Console.WriteLine("----------");
 	}
+
+	// --- Private Helpers:
+	// NOTE: https://stackoverflow.com/q/58453972
+	private static bool IsNullable(PropertyInfo propertyInfo)
+		=> new NullabilityInfoContext().Create(propertyInfo).WriteState is NullabilityState.Nullable;
 }
