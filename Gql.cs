@@ -9,6 +9,12 @@ using System.Text.Json;
 
 namespace hc_ef_custom.Types;
 
+public class ProjectionResult<T>
+{
+	public T Main { get; set; } = default!;
+	public Dictionary<string, object> Auth { get; set; } = default!;
+}
+
 [QueryType]
 public static class Query
 {
@@ -17,6 +23,33 @@ public static class Query
 	[UseCustomProjection(ResultType.Single)]
 	public static IQueryable<Book?> GetBook(AppDbContext db, int id) =>
 		db.Books.Where(b => b.Id == id);
+
+	public static async Task<Book?> GetBook2(AppDbContext db, int id)
+	{
+		var result = await db.Books
+			.Where(b => b.Id == id)
+			.Select(b => new ProjectionResult<BookDto>
+			{
+				Main = new()
+				{
+					Title = b.Title,
+					Ratings = b.Ratings.Select(r => new BookRatingDto
+					{
+						Rating = r.Rating,
+					}),
+				},
+				Auth = new()
+				{
+					{ "Title_StartsWithCrap",  b.Title.StartsWith("Crap") },
+					{ "Ratings", b.Ratings.Select(r => new Dictionary<string, object> {
+						{ "Rating_IsGreaterThan3", r.Rating > 3 }
+					}) }
+				},
+			})
+			.FirstOrDefaultAsync();
+		Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+		return null;
+	}
 
 	// public static async Task<Author?> GetAuthor(
 	// 	AppDbContext db,
@@ -43,7 +76,7 @@ public class CustomProjectionMiddleware
 	public async Task Invoke(IMiddlewareContext context)
 	{
 		await _next(context);
-		if (context.Result is not IQueryable<object> query)
+		if (context.Result is not IQueryable<Book> query)
 			throw new InvalidOperationException();
 
 		Console.WriteLine($"query.ElementType: {query.ElementType}");
@@ -54,9 +87,9 @@ public class CustomProjectionMiddleware
 			[typeof(AuthorDto)] = typeof(Author),
 			[typeof(BookRatingDto)] = typeof(BookRating),
 		};
-		List<MemberAssignment> Project(IEnumerable<ISelection> selections, Expression on)
+		List<Expression> Project(IEnumerable<ISelection> selections, Expression on)
 		{
-			var assignments = new List<MemberAssignment>();
+			var exprs = new List<Expression>();
 			foreach (var selection in selections)
 			{
 				var dtoProperty = (PropertyInfo)selection.Field.Member!;
@@ -66,7 +99,7 @@ public class CustomProjectionMiddleware
 
 				if (selection.Type.IsLeafType())
 				{
-					assignments.Add(Expression.Bind(dtoProperty, entityPropertyAccess));
+					exprs.Add(Expression.Convert(entityPropertyAccess, typeof(object)));
 				}
 				else
 				{
@@ -77,8 +110,8 @@ public class CustomProjectionMiddleware
 					{
 						var e = typeDict[objectType.RuntimeType];
 						var param = Expression.Parameter(e);
-						var init = Expression.MemberInit(
-							Expression.New(objectType.RuntimeType),
+						var init = Expression.NewArrayInit(
+							typeof(object),
 							Project(innerSelections, param)
 						);
 						var lambda = Expression.Lambda(init, param);
@@ -88,19 +121,20 @@ public class CustomProjectionMiddleware
 							new Type[] { e, lambda.Body.Type },
 							entityPropertyAccess, lambda // NOTE: `propertyExpr` here is what gets passed to `Select` as its `this` argument, and `lambda` is the lambda that gets passed to it.
 						);
-						assignments.Add(Expression.Bind(dtoProperty, select));
+						exprs.Add(select);
 					}
 					else
 					{
-						var memberInit = Expression.MemberInit(
-							Expression.New(objectType.RuntimeType),
-							Project(innerSelections, entityPropertyAccess)
-						);
-						assignments.Add(Expression.Bind(dtoProperty, memberInit));
+						// var memberInit = Expression.NewArrayInit(
+						// 	typeof(object),
+						// 	Project(innerSelections, entityPropertyAccess)
+						// );
+						// exprs.Add(memberInit);
+						exprs.AddRange(Project(innerSelections, entityPropertyAccess));
 					}
 				}
 			}
-			return assignments;
+			return exprs;
 		}
 
 		// TODO: The auth rules could be "deep", so we can't just designate a dictionary on the top-level for them. We probably have to use a "Tuple" either the built-in type or a special type, that holds both the actual object result, and the auth rules. Dictionary/new type
@@ -109,8 +143,8 @@ public class CustomProjectionMiddleware
 		var type = (IObjectType)context.Selection.Type.NamedType();
 		var topLevelSelections = context.GetSelections(type);
 		var param = Expression.Parameter(typeDict[type.RuntimeType]);
-		var dtoMemberInit = Expression.MemberInit(
-			Expression.New(type.RuntimeType),
+		var dtoMemberInit = Expression.NewArrayInit(
+			typeof(object),
 			Project(topLevelSelections, param)
 		);
 		var lambda = Expression.Lambda(dtoMemberInit, param);
@@ -118,13 +152,13 @@ public class CustomProjectionMiddleware
 		Console.ForegroundColor = ConsoleColor.Cyan;
 		Console.WriteLine($"EXPRESSION: {lambda.ToReadableString()}");
 
-		var result = await query.FirstOrDefaultAsync();
+		var result = await query.Select((Expression<Func<Book, object[]>>)lambda).FirstOrDefaultAsync();
 
 		Console.ForegroundColor = ConsoleColor.Yellow;
 		Console.WriteLine($"RESULT: {JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })}");
 		Console.ResetColor();
 
-		context.Result = result;
+		context.Result = null;
 
 		Console.WriteLine("----------");
 	}
@@ -145,15 +179,16 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 		MemberInfo member
 	)
 	{
+		descriptor.Type<BookType>();
 		descriptor.Extend().OnBeforeCreate((context, definition) =>
 		{
 			// https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
-			var typeInfo = context.TypeInspector.CreateTypeInfo(definition.ResultType!);
-			Console.WriteLine($"typeInfo: {typeInfo}");
+			// var typeInfo = context.TypeInspector.CreateTypeInfo(definition.ResultType!);
+			// Console.WriteLine($"typeInfo: {typeInfo}");
 
-			var typeRef = context.TypeInspector.GetTypeRef(typeInfo.NamedType, TypeContext.Output);
-			Console.WriteLine($"typeRef: {typeRef}");
-			definition.Type = typeRef;
+			// var typeRef = context.TypeInspector.GetTypeRef(typeInfo.NamedType, TypeContext.Output);
+			// Console.WriteLine($"typeRef: {typeRef}");
+			// definition.Type = typeRef;
 		});
 		descriptor.Use<CustomProjectionMiddleware>();
 	}
@@ -174,12 +209,15 @@ public class BookDto
 {
 	public int Id { get; init; } = default!;
 	public string Title { get; init; } = default!;
+	public double AverageRating { get; init; } = default!;
 	public AuthorDto Author { get; init; } = default!;
 	public IEnumerable<BookRatingDto> Ratings { get; init; } = default!;
 }
 public class AuthorDto
 {
 	public int Id { get; init; } = default!;
+	public string FirstName { get; init; } = default!;
+	public string LastName { get; init; } = default!;
 	public string FullName { get; init; } = default!;
 }
 public class BookRatingDto
