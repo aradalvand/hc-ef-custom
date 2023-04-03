@@ -15,16 +15,14 @@ public static class Query
 {
 	public const string AuthContextKey = "Auth";
 
-	public static async Task<Book?> GetBook(
+	public static async Task<BookDto?> GetBook(
 		AppDbContext db,
 		IResolverContext context,
 		int id
 	)
 	{
-		await db.Books.Where(b => b.Id == id)
-			.ProjectCustom(context, ResultType.Single);
-
-		return null;
+		return await db.Books.Where(b => b.Id == id)
+			.ProjectCustom2(context, ResultType.Single);
 	}
 
 	public static async Task<Author?> GetAuthor(
@@ -42,6 +40,46 @@ public static class Query
 
 public static class QueryableExtensions
 {
+	public static async Task<BookDto?> ProjectCustom2(
+		this IQueryable<Book> query,
+		IResolverContext context,
+		ResultType resultType
+	)
+	{
+		var type = (IObjectType)context.Selection.Type.NamedType();
+		var topLevelSelections = context.GetSelections(type);
+
+		var param = Expression.Parameter(typeof(Book));
+
+		var assignments = new List<MemberAssignment>();
+		foreach (var selection in topLevelSelections)
+		{
+			var dtoProperty = (PropertyInfo)selection.Field.Member!;
+			var entityProperty = typeof(Book).GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
+			var entityPropertyAccess = Expression.Property(param, entityProperty);
+			var assignment = Expression.Bind(dtoProperty, entityPropertyAccess);
+			assignments.Add(assignment);
+		}
+		var dtoMemberInit = Expression.MemberInit(Expression.New(typeof(BookDto)), assignments);
+
+		var lambda = Expression.Lambda(dtoMemberInit, param);
+
+		Console.WriteLine("----------");
+
+		Console.ForegroundColor = ConsoleColor.Cyan;
+		Console.WriteLine($"EXPRESSION: {lambda.ToReadableString()}");
+
+		var result = await query
+			.Select((Expression<Func<Book, BookDto>>)lambda)
+			.FirstOrDefaultAsync();
+
+		Console.ForegroundColor = ConsoleColor.Yellow;
+		Console.WriteLine($"RESULT: {JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })}");
+		Console.ResetColor();
+
+		return result;
+	}
+
 	public static async Task ProjectCustom<T>(
 		this IQueryable<T> query,
 		IResolverContext context,
@@ -139,9 +177,24 @@ public enum ResultType
 	Multiple
 }
 
-public class BookType : ObjectType<Book>
+// Benefits of this approach:
+// - No boxing
+// - No "materializing" logic
+// - We can directly return the result with no modification
+// - Inheritance checks and results would be easier
+public class BookDto
 {
-	protected override void Configure(IObjectTypeDescriptor<Book> descriptor)
+	public int Id { get; init; } = default!;
+	public string Title { get; init; } = default!;
+}
+// public record BookDto(
+// 	int Id = default!,
+// 	string Title = default!
+// );
+
+public class BookType : ObjectType<BookDto>
+{
+	protected override void Configure(IObjectTypeDescriptor<BookDto> descriptor)
 	{
 		// descriptor.Ignore();
 
