@@ -95,10 +95,10 @@ public class CustomProjectionMiddleware
 					var dtoProperty = (PropertyInfo)subSelection.Field.Member!;
 					var entityProperty = objectTypeEntityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
 
-					var foo = sourceExpression.Type == objectTypeEntityType
+					var sourceExpressionConverted = sourceExpression.Type == objectTypeEntityType
 						? sourceExpression
 						: Expression.Convert(sourceExpression, objectTypeEntityType);
-					var entityPropertyAccess = Expression.Property(foo, entityProperty);
+					var entityPropertyAccess = Expression.Property(sourceExpressionConverted, entityProperty);
 
 					if (subSelection.SelectionSet is null)
 					{
@@ -126,14 +126,14 @@ public class CustomProjectionMiddleware
 
 					foreach (var rule in authRules)
 					{
-						if (!rule.ShouldApply?.Invoke(subSelection) ?? false)
+						if (rule.ShouldApply?.Invoke(subSelection) == false)
 							continue;
 
 						metaExpressions.Add(
 							rule.Key,
 							ReplacingExpressionVisitor.Replace(
 								rule.Expression.Parameters.First(), // NOTE: We assume there's only one parameter
-								foo,
+								sourceExpressionConverted,
 								rule.Expression.Body
 							)
 						);
@@ -161,33 +161,16 @@ public class CustomProjectionMiddleware
 				memberInitExpressions.Add(memberInit);
 			}
 
-			if (memberInitExpressions.Count == 1)
-				return memberInitExpressions.Single();
-
-			ConditionalExpression Conditionalize(int index = 0)
-			{
-				ConditionalExpression? lastConditional = null;
-				foreach (var m in memberInitExpressions)
-				{
-					lastConditional = Expression.Condition(
-						Expression.TypeIs(sourceExpression, _typeDict[m.Type]),
-						Expression.Convert(m, dtoType), // NOTE: The conversion is necessary
-						lastConditional is null ? Expression.Constant(null, dtoType) : lastConditional
-					);
-				}
-				return lastConditional!;
-
-				// var current = memberInitExpressions[index];
-				// var condition = Expression.Condition(
-				// 	Expression.TypeIs(sourceExpression, _typeDict[current.Type]),
-				// 	Expression.Convert(current, dtoType), // NOTE: The conversion is necessary
-				// 	index == memberInitExpressions.Count - 1 // NOTE: If last index
-				// 		? Expression.Constant(null, dtoType)
-				// 		: Conditionalize(index + 1)
-				// );
-				// return condition;
-			}
-			return Conditionalize();
+			return memberInitExpressions.Count > 1
+				? memberInitExpressions.Aggregate(
+					Expression.Constant(null, dtoType) as Expression,
+					(accumulator, current) => Expression.Condition(
+						Expression.TypeIs(sourceExpression, _typeDict[current.Type]),
+						Expression.Convert(current, dtoType), // NOTE: The conversion is necessary — or else we get an exception, the two sides of a ternary expression should be of the same type.
+						accumulator
+					)
+				)
+				: memberInitExpressions.Single();
 		}
 	}
 

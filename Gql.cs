@@ -3,9 +3,6 @@ using System.Reflection;
 using HotChocolate.Execution.Processing;
 using System.Runtime.CompilerServices;
 using HotChocolate.Types.Descriptors;
-using System.Text.Json;
-using System.Diagnostics;
-using System.ComponentModel;
 using AgileObjects.ReadableExpressions;
 
 namespace hc_ef_custom.Types;
@@ -25,12 +22,12 @@ public static class Query
 	public static IQueryable<Lesson> GetLessons(AppDbContext db) =>
 		db.Lessons;
 
-	// [UseTestAttribute]
-	// [UseProjection]
-	// public static IQueryable<Course> GetCourses2(AppDbContext db)
-	// {
-	// 	return db.Courses;
-	// }
+	[UseTestAttribute]
+	[UseProjection]
+	public static IQueryable<Lesson> GetLessons2(AppDbContext db)
+	{
+		return db.Lessons;
+	}
 }
 
 public class UseCustomProjection<T> : ObjectFieldDescriptorAttribute where T : class, IOutputType
