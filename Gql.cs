@@ -10,12 +10,6 @@ using AgileObjects.ReadableExpressions;
 
 namespace hc_ef_custom.Types;
 
-public class ProjectionResult<T>
-{
-	public T Main { get; set; } = default!;
-	public Dictionary<string, object> Auth { get; set; } = default!;
-}
-
 [QueryType]
 public static class Query
 {
@@ -31,12 +25,12 @@ public static class Query
 	public static IQueryable<Lesson> GetLessons(AppDbContext db) =>
 		db.Lessons;
 
-	[UseTestAttribute]
-	[UseProjection]
-	public static IQueryable<Course> GetCourses2(AppDbContext db)
-	{
-		return db.Courses;
-	}
+	// [UseTestAttribute]
+	// [UseProjection]
+	// public static IQueryable<Course> GetCourses2(AppDbContext db)
+	// {
+	// 	return db.Courses;
+	// }
 }
 
 public class UseCustomProjection<T> : ObjectFieldDescriptorAttribute where T : class, IOutputType
@@ -102,8 +96,8 @@ public class CourseType : ObjectType<CourseDto>
 {
 	protected override void Configure(IObjectTypeDescriptor<CourseDto> descriptor)
 	{
-		// descriptor.Field(b => b.Title)
-		// 	.Auth(b => b.Ratings.Any(r => r.Rating > 3));
+		descriptor.Field(b => b.Title)
+			.Auth(b => b.Ratings.Any(r => r.Stars > 3));
 	}
 }
 public class InstructorType : ObjectType<InstructorDto>
@@ -137,35 +131,35 @@ public class ArticleLessonType : ObjectType<ArticleLessonDto>
 	}
 }
 
-// public static class ObjectFieldDescriptorExtensions
-// {
-// 	public static IObjectFieldDescriptor Auth(
-// 		this IObjectFieldDescriptor descriptor,
-// 		Expression<Func<Course, bool>> ruleExpr
-// 	)
-// 	{
-// 		const string key = "Foo";
-// 		AuthRule rule = new(key, ruleExpr);
-// 		descriptor.Extend().OnBeforeCreate(d =>
-// 		{
-// 			if (d.ContextData.GetValueOrDefault(CustomProjectionMiddleware.MetaContextKey) is List<AuthRule> authRules)
-// 				authRules.Add(rule);
-// 			else
-// 				d.ContextData[CustomProjectionMiddleware.MetaContextKey] = new List<AuthRule> { rule };
-// 		});
-// 		descriptor.Use(next => async context =>
-// 		{
-// 			await next(context);
-// 			var result = context.Parent<CourseDto>()._Meta[key];
-// 			if (result)
-// 				Console.WriteLine("Permitted.");
-// 			else
-// 				Console.WriteLine("Not permitted.");
-// 		});
+public static class ObjectFieldDescriptorExtensions
+{
+	public static IObjectFieldDescriptor Auth(
+		this IObjectFieldDescriptor descriptor,
+		Expression<Func<Course, bool>> ruleExpr
+	)
+	{
+		const string key = "Foo";
+		AuthRule rule = new(key, ruleExpr);
+		descriptor.Extend().OnBeforeCreate(d =>
+		{
+			if (d.ContextData.GetValueOrDefault(CustomProjectionMiddleware.MetaContextKey) is List<AuthRule> authRules)
+				authRules.Add(rule);
+			else
+				d.ContextData[CustomProjectionMiddleware.MetaContextKey] = new List<AuthRule> { rule };
+		});
+		descriptor.Use(next => async context =>
+		{
+			await next(context);
+			var result = context.Parent<CourseDto>()._Meta[key];
+			if (result)
+				Console.WriteLine("Permitted.");
+			else
+				Console.WriteLine("Not permitted.");
+		});
 
-// 		return descriptor;
-// 	}
-// }
+		return descriptor;
+	}
+}
 
 public record AuthRule(
 	string Key,

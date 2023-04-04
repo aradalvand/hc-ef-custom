@@ -44,10 +44,10 @@ public abstract class LessonDto : BaseDto
 
 public class VideoLessonDto : LessonDto
 {
-	public required Uri Url { get; set; }
+	public Uri Url { get; set; } = default!;
 }
 
 public class ArticleLessonDto : LessonDto
 {
-	public required string Text { get; set; }
+	public string Text { get; set; } = default!;
 }

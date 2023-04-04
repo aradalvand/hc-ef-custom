@@ -124,8 +124,11 @@ public class CustomProjectionMiddleware
 					if (subSelection.Field.ContextData.GetValueOrDefault(MetaContextKey) is not IEnumerable<AuthRule> authRules)
 						continue;
 
-					foreach (var rule in authRules.Where(r => r.ShouldApply?.Invoke(subSelection) ?? true))
+					foreach (var rule in authRules)
 					{
+						if (!rule.ShouldApply?.Invoke(subSelection) ?? false)
+							continue;
+
 						metaExpressions.Add(
 							rule.Key,
 							ReplacingExpressionVisitor.Replace(
@@ -163,18 +166,28 @@ public class CustomProjectionMiddleware
 
 			ConditionalExpression Conditionalize(int index = 0)
 			{
-				var current = memberInitExpressions[index];
-				var condition = Expression.Condition(
-					Expression.TypeIs(sourceExpression, _typeDict[current.Type]),
-					Expression.Convert(current, dtoType),
-					index == memberInitExpressions.Count - 1 // NOTE: If last index
-						? Expression.Constant(null, dtoType)
-						: Conditionalize(index + 1)
-				);
-				return condition;
+				ConditionalExpression? lastConditional = null;
+				foreach (var m in memberInitExpressions)
+				{
+					lastConditional = Expression.Condition(
+						Expression.TypeIs(sourceExpression, _typeDict[m.Type]),
+						Expression.Convert(m, dtoType), // NOTE: The conversion is necessary
+						lastConditional is null ? Expression.Constant(null, dtoType) : lastConditional
+					);
+				}
+				return lastConditional!;
+
+				// var current = memberInitExpressions[index];
+				// var condition = Expression.Condition(
+				// 	Expression.TypeIs(sourceExpression, _typeDict[current.Type]),
+				// 	Expression.Convert(current, dtoType), // NOTE: The conversion is necessary
+				// 	index == memberInitExpressions.Count - 1 // NOTE: If last index
+				// 		? Expression.Constant(null, dtoType)
+				// 		: Conditionalize(index + 1)
+				// );
+				// return condition;
 			}
-			var conditional = Conditionalize();
-			return conditional;
+			return Conditionalize();
 		}
 	}
 

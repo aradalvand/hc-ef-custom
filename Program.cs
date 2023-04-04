@@ -1,7 +1,10 @@
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddDbContextPool<AppDbContext>(o => o
-	.UseNpgsql(@"Host=localhost;Username=postgres;Password=123456;Database=hc_ef_custom")
+	.UseNpgsql(
+		@"Host=localhost;Username=postgres;Password=123456;Database=hc_ef_custom"
+	// o => o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)
+	)
 	.UseProjectables()
 );
 
