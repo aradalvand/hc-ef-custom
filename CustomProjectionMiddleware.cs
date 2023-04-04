@@ -19,9 +19,12 @@ public class CustomProjectionMiddleware
 
 	private Dictionary<Type, Type> _typeDict = new() // TEMP
 	{
-		[typeof(BookDto)] = typeof(Book),
-		[typeof(AuthorDto)] = typeof(Author),
-		[typeof(BookRatingDto)] = typeof(BookRating),
+		[typeof(CourseDto)] = typeof(Course),
+		[typeof(InstructorDto)] = typeof(Instructor),
+		[typeof(RatingDto)] = typeof(Rating),
+		[typeof(LessonDto)] = typeof(Lesson),
+		[typeof(VideoLessonDto)] = typeof(VideoLesson),
+		[typeof(ArticleLessonDto)] = typeof(ArticleLesson),
 	};
 
 	public CustomProjectionMiddleware(FieldDelegate next, ResultType resultType)
@@ -57,8 +60,8 @@ public class CustomProjectionMiddleware
 
 		Expression Project(Expression sourceExpression, ISelection selection)
 		{
-			var objectType = (IObjectType)selection.Type.NamedType();
-			var dtoType = objectType.RuntimeType;
+			var type = selection.Type.NamedType();
+			var dtoType = type.ToRuntimeType();
 			var entityType = _typeDict[dtoType];
 
 			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable)))
@@ -79,13 +82,13 @@ public class CustomProjectionMiddleware
 
 			List<MemberAssignment> assignments = new();
 			Dictionary<string, Expression> metaExpressions = new();
-			foreach (var subSelection in context.GetSelections(objectType, selection))
+			foreach (var subSelection in context.GetSelections(type, selection))
 			{
 				var dtoProperty = (PropertyInfo)subSelection.Field.Member!;
 				var entityProperty = entityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
 				var entityPropertyAccess = Expression.Property(sourceExpression, entityProperty);
 
-				if (subSelection.Type.IsLeafType())
+				if (subSelection.SelectionSet is null)
 				{
 					var assignment = Expression.Bind(dtoProperty, entityPropertyAccess);
 					assignments.Add(assignment);

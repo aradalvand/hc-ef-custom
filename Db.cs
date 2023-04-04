@@ -8,47 +8,85 @@ public class AppDbContext : DbContext
 	{
 	}
 
-	public DbSet<Author> Authors => Set<Author>();
-	public DbSet<Book> Books => Set<Book>();
-	public DbSet<BookRating> BookRatings => Set<BookRating>();
+	protected override void OnModelCreating(ModelBuilder builder)
+	{
+		builder.Entity<Lesson>()
+			.HasDiscriminator<string>("Type")
+				.HasValue<VideoLesson>("video")
+				.HasValue<ArticleLesson>("article");
+	}
+
+	public DbSet<Course> Courses => Set<Course>();
+	public DbSet<Instructor> Instructors => Set<Instructor>();
+	public DbSet<Rating> Ratings => Set<Rating>();
+	public DbSet<Lesson> Lessons => Set<Lesson>();
 }
 
-public class Author
+public abstract class BaseEntity
 {
-	public required int Id { get; set; }
+	public int Id { get; set; }
+}
+
+public class Course : BaseEntity
+{
+	public required int InstructorId { get; set; }
+	public required string Title { get; set; }
+
+	[Projectable]
+	public double AverageRating => Ratings.Average(r => r.Stars);
+
+	public required Instructor Instructor { get; set; }
+	public ICollection<Lesson> Lessons { get; set; } = default!;
+	public ICollection<Rating> Ratings { get; set; } = default!;
+}
+
+public class Rating : BaseEntity
+{
+	public required int CourseId { get; set; }
+	public required byte Stars { get; set; }
+
+	public Course Course { get; set; } = default!;
+}
+
+public class Instructor : BaseEntity
+{
 	public required string FirstName { get; set; }
 	public required string LastName { get; set; }
 
 	[Projectable]
 	public string FullName => FirstName + " " + LastName;
 
-	// Navigation Props:
-	public ICollection<Book> Books { get; set; } = default!;
+	public ICollection<Course> Courses { get; set; } = default!;
 }
 
-public class Book
+[InterfaceType]
+public abstract class Lesson : BaseEntity
 {
-	public required int Id { get; set; }
-	public int AuthorId { get; set; }
+	public required int CourseId { get; set; }
 	public required string Title { get; set; }
 
-	[Projectable]
-	public double AverageRating => Ratings.Average(r => r.Rating);
-
-	[Projectable]
-	public string Foo(int num) => $"{Title}-${num}";
-
-	// Navigation Props:
-	public Author Author { get; set; } = default!;
-	public ICollection<BookRating> Ratings { get; set; } = default!;
+	public Course Course { get; set; } = default!;
 }
 
-public class BookRating
+public class VideoLesson : Lesson
 {
-	public required int Id { get; set; }
-	public required int BookId { get; set; }
-	public required byte Rating { get; set; }
+	public required Uri Url { get; set; }
+}
+public class ArticleLesson : Lesson
+{
+	public required string Text { get; set; }
+}
 
-	// Navigation Props:
-	public Book Book { get; set; } = default!;
+
+public class VideoLesson2Type : ObjectType<VideoLesson>
+{
+	protected override void Configure(IObjectTypeDescriptor<VideoLesson> descriptor)
+	{
+	}
+}
+public class ArticleLesson2Type : ObjectType<ArticleLesson>
+{
+	protected override void Configure(IObjectTypeDescriptor<ArticleLesson> descriptor)
+	{
+	}
 }

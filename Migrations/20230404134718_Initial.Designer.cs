@@ -11,7 +11,7 @@ using hc_ef_custom;
 namespace hcefcustom.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20230329120020_Initial")]
+    [Migration("20230404134718_Initial")]
     partial class Initial
     {
         /// <inheritdoc />
@@ -24,7 +24,29 @@ namespace hcefcustom.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("hc_ef_custom.Author", b =>
+            modelBuilder.Entity("hc_ef_custom.Course", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("InstructorId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstructorId");
+
+                    b.ToTable("Courses");
+                });
+
+            modelBuilder.Entity("hc_ef_custom.Instructor", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -42,10 +64,10 @@ namespace hcefcustom.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Authors");
+                    b.ToTable("Instructors");
                 });
 
-            modelBuilder.Entity("hc_ef_custom.Book", b =>
+            modelBuilder.Entity("hc_ef_custom.Lesson", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -53,7 +75,7 @@ namespace hcefcustom.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<int>("AuthorId")
+                    b.Property<int>("CourseId")
                         .HasColumnType("integer");
 
                     b.Property<string>("Title")
@@ -62,12 +84,12 @@ namespace hcefcustom.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AuthorId");
+                    b.HasIndex("CourseId");
 
-                    b.ToTable("Books");
+                    b.ToTable("Lessons");
                 });
 
-            modelBuilder.Entity("hc_ef_custom.BookRating", b =>
+            modelBuilder.Entity("hc_ef_custom.Rating", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -75,44 +97,62 @@ namespace hcefcustom.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<int>("BookId")
+                    b.Property<int>("CourseId")
                         .HasColumnType("integer");
 
-                    b.Property<byte>("Rating")
+                    b.Property<byte>("Stars")
                         .HasColumnType("smallint");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("BookId");
+                    b.HasIndex("CourseId");
 
-                    b.ToTable("BookRatings");
+                    b.ToTable("Ratings");
                 });
 
-            modelBuilder.Entity("hc_ef_custom.Book", b =>
+            modelBuilder.Entity("hc_ef_custom.Course", b =>
                 {
-                    b.HasOne("hc_ef_custom.Author", "Author")
-                        .WithMany("Books")
-                        .HasForeignKey("AuthorId")
+                    b.HasOne("hc_ef_custom.Instructor", "Instructor")
+                        .WithMany("Courses")
+                        .HasForeignKey("InstructorId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Author");
+                    b.Navigation("Instructor");
                 });
 
-            modelBuilder.Entity("hc_ef_custom.BookRating", b =>
+            modelBuilder.Entity("hc_ef_custom.Lesson", b =>
                 {
-                    b.HasOne("hc_ef_custom.Book", "Book")
-                        .WithMany()
-                        .HasForeignKey("BookId")
+                    b.HasOne("hc_ef_custom.Course", "Course")
+                        .WithMany("Lessons")
+                        .HasForeignKey("CourseId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("Book");
+                    b.Navigation("Course");
                 });
 
-            modelBuilder.Entity("hc_ef_custom.Author", b =>
+            modelBuilder.Entity("hc_ef_custom.Rating", b =>
                 {
-                    b.Navigation("Books");
+                    b.HasOne("hc_ef_custom.Course", "Course")
+                        .WithMany("Ratings")
+                        .HasForeignKey("CourseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Course");
+                });
+
+            modelBuilder.Entity("hc_ef_custom.Course", b =>
+                {
+                    b.Navigation("Lessons");
+
+                    b.Navigation("Ratings");
+                });
+
+            modelBuilder.Entity("hc_ef_custom.Instructor", b =>
+                {
+                    b.Navigation("Courses");
                 });
 #pragma warning restore 612, 618
         }

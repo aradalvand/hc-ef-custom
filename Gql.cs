@@ -6,6 +6,7 @@ using HotChocolate.Types.Descriptors;
 using System.Text.Json;
 using System.Diagnostics;
 using System.ComponentModel;
+using AgileObjects.ReadableExpressions;
 
 namespace hc_ef_custom.Types;
 
@@ -18,13 +19,24 @@ public class ProjectionResult<T>
 [QueryType]
 public static class Query
 {
-	[UseCustomProjection<BookType>(ResultType.Single)]
-	public static IQueryable<Book?> GetBook(AppDbContext db, int id) =>
-		db.Books.Where(b => b.Id == id);
+	[UseCustomProjection<CourseType>(ResultType.Single)]
+	public static IQueryable<Course?> GetCourse(AppDbContext db, int id) =>
+		db.Courses.Where(b => b.Id == id);
 
-	[UseCustomProjection<AuthorType>(ResultType.Single)]
-	public static IQueryable<Author?> GetAuthor(AppDbContext db, int id) =>
-		db.Authors.Where(a => a.Id == id);
+	[UseCustomProjection<InstructorType>(ResultType.Single)]
+	public static IQueryable<Instructor?> GetInstructor(AppDbContext db, int id) =>
+		db.Instructors.Where(a => a.Id == id);
+
+	[UseCustomProjection<LessonType>(ResultType.Multiple)]
+	public static IQueryable<Lesson> GetLessons(AppDbContext db) =>
+		db.Lessons;
+
+	[UseTestAttribute]
+	[UseProjection]
+	public static IQueryable<Course> GetCourses2(AppDbContext db)
+	{
+		return db.Courses;
+	}
 }
 
 public class UseCustomProjection<T> : ObjectFieldDescriptorAttribute where T : class, IOutputType
@@ -57,93 +69,103 @@ public class UseCustomProjection<T> : ObjectFieldDescriptorAttribute where T : c
 	}
 }
 
+public class UseTestAttribute : ObjectFieldDescriptorAttribute
+{
+	public UseTestAttribute([CallerLineNumber] int order = 0)
+	{
+		Order = order;
+	}
+
+	protected override void OnConfigure(
+		IDescriptorContext context,
+		IObjectFieldDescriptor descriptor,
+		MemberInfo member
+	)
+	{
+		descriptor.Use(next => async context =>
+		{
+			await next(context);
+			Console.WriteLine($"context.Result: {context.Result}");
+			if (context.Result is IQueryable<object> query)
+				Console.WriteLine($"query.Expression: {query.Expression.ToReadableString()}");
+		});
+	}
+}
+
 public enum ResultType
 {
 	Single,
 	Multiple
 }
 
-// Benefits of this approach:
-// - No boxing
-// - No "materializing" logic
-// - We can directly return the result with no modification
-// - Inheritance checks and results would be easier
-public abstract class BaseDto
+public class CourseType : ObjectType<CourseDto>
 {
-	[GraphQLIgnore]
-	[EditorBrowsable(EditorBrowsableState.Never)]
-	public IDictionary<string, bool> _Meta { get; init; } = default!;
-}
-public class BookDto : BaseDto
-{
-	public int Id { get; init; } = default!;
-	public string Title { get; init; } = default!;
-	public double AverageRating { get; init; } = default!;
-	public AuthorDto Author { get; init; } = default!;
-	public IEnumerable<BookRatingDto> Ratings { get; init; } = default!;
-}
-public class AuthorDto : BaseDto
-{
-	public int Id { get; init; } = default!;
-	public string FirstName { get; init; } = default!;
-	public string LastName { get; init; } = default!;
-	public string FullName { get; init; } = default!;
-	public IEnumerable<BookDto> Books { get; init; } = default!;
-}
-public class BookRatingDto : BaseDto
-{
-	public int Id { get; init; } = default!;
-	public byte Rating { get; init; } = default!;
-}
-// public record BookDto(
-// 	int Id = default!,
-// 	string Title = default!
-// );
-
-public class BookType : ObjectType<BookDto>
-{
-	protected override void Configure(IObjectTypeDescriptor<BookDto> descriptor)
+	protected override void Configure(IObjectTypeDescriptor<CourseDto> descriptor)
 	{
-		descriptor.Field(b => b.Title)
-			.Auth(b => b.Ratings.Any(r => r.Rating > 3));
+		// descriptor.Field(b => b.Title)
+		// 	.Auth(b => b.Ratings.Any(r => r.Rating > 3));
 	}
 }
-public class AuthorType : ObjectType<AuthorDto>
+public class InstructorType : ObjectType<InstructorDto>
 {
-	protected override void Configure(IObjectTypeDescriptor<AuthorDto> descriptor)
+	protected override void Configure(IObjectTypeDescriptor<InstructorDto> descriptor)
+	{
+	}
+}
+public class RatingType : ObjectType<RatingDto>
+{
+	protected override void Configure(IObjectTypeDescriptor<RatingDto> descriptor)
+	{
+	}
+}
+public class LessonType : InterfaceType<LessonDto>
+{
+	protected override void Configure(IInterfaceTypeDescriptor<LessonDto> descriptor)
+	{
+	}
+}
+public class VideoLessonType : ObjectType<VideoLessonDto>
+{
+	protected override void Configure(IObjectTypeDescriptor<VideoLessonDto> descriptor)
+	{
+	}
+}
+public class ArticleLessonType : ObjectType<ArticleLessonDto>
+{
+	protected override void Configure(IObjectTypeDescriptor<ArticleLessonDto> descriptor)
 	{
 	}
 }
 
-public static class ObjectFieldDescriptorExtensions
-{
-	public static IObjectFieldDescriptor Auth(
-		this IObjectFieldDescriptor descriptor,
-		Expression<Func<Book, bool>> ruleExpr
-	)
-	{
-		const string key = "Foo";
-		AuthRule rule = new(key, ruleExpr);
-		descriptor.Extend().OnBeforeCreate(d =>
-		{
-			if (d.ContextData.GetValueOrDefault(CustomProjectionMiddleware.MetaContextKey) is List<AuthRule> authRules)
-				authRules.Add(rule);
-			else
-				d.ContextData[CustomProjectionMiddleware.MetaContextKey] = new List<AuthRule> { rule };
-		});
-		descriptor.Use(next => async context =>
-		{
-			await next(context);
-			var result = context.Parent<BookDto>()._Meta[key];
-			if (result)
-				Console.WriteLine("Permitted.");
-			else
-				Console.WriteLine("Not permitted.");
-		});
+// public static class ObjectFieldDescriptorExtensions
+// {
+// 	public static IObjectFieldDescriptor Auth(
+// 		this IObjectFieldDescriptor descriptor,
+// 		Expression<Func<Course, bool>> ruleExpr
+// 	)
+// 	{
+// 		const string key = "Foo";
+// 		AuthRule rule = new(key, ruleExpr);
+// 		descriptor.Extend().OnBeforeCreate(d =>
+// 		{
+// 			if (d.ContextData.GetValueOrDefault(CustomProjectionMiddleware.MetaContextKey) is List<AuthRule> authRules)
+// 				authRules.Add(rule);
+// 			else
+// 				d.ContextData[CustomProjectionMiddleware.MetaContextKey] = new List<AuthRule> { rule };
+// 		});
+// 		descriptor.Use(next => async context =>
+// 		{
+// 			await next(context);
+// 			var result = context.Parent<CourseDto>()._Meta[key];
+// 			if (result)
+// 				Console.WriteLine("Permitted.");
+// 			else
+// 				Console.WriteLine("Not permitted.");
+// 		});
 
-		return descriptor;
-	}
-}
+// 		return descriptor;
+// 	}
+// }
 
 public record AuthRule(
 	string Key,
