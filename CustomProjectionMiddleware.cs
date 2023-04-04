@@ -60,8 +60,7 @@ public class CustomProjectionMiddleware
 
 		Expression Project(Expression sourceExpression, ISelection selection)
 		{
-			var type = selection.Type.NamedType();
-			var dtoType = type.ToRuntimeType();
+			var dtoType = selection.Type.NamedType().ToRuntimeType();
 			var entityType = _typeDict[dtoType];
 
 			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable)))
@@ -80,70 +79,102 @@ public class CustomProjectionMiddleware
 				return select;
 			}
 
-			List<MemberAssignment> assignments = new();
-			Dictionary<string, Expression> metaExpressions = new();
-			foreach (var subSelection in context.GetSelections(type, selection))
+			List<MemberInitExpression> memberInitExpressions = new();
+			foreach (var objectType in context.Operation.GetPossibleTypes(selection))
 			{
-				var dtoProperty = (PropertyInfo)subSelection.Field.Member!;
-				var entityProperty = entityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
-				var entityPropertyAccess = Expression.Property(sourceExpression, entityProperty);
+				var objectTypeDtoType = objectType.RuntimeType;
+				var objectTypeEntityType = _typeDict[objectType.RuntimeType];
 
-				if (subSelection.SelectionSet is null)
+				List<MemberAssignment> assignments = new();
+				Dictionary<string, Expression> metaExpressions = new();
+				foreach (var subSelection in context.GetSelections(objectType, selection))
 				{
-					var assignment = Expression.Bind(dtoProperty, entityPropertyAccess);
-					assignments.Add(assignment);
-				}
-				else
-				{
-					var subProjection = Project(entityPropertyAccess, subSelection);
-					var assignment = Expression.Bind(
-						dtoProperty,
-						IsNullable(entityProperty) // NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
-							? Expression.Condition(
-								Expression.Equal(entityPropertyAccess, Expression.Constant(null)),
-								Expression.Constant(null, subProjection.Type), // NOTE: We have to pass the type
-								subProjection
+					if (subSelection.Field.IsIntrospectionField)
+						continue;
+
+					var dtoProperty = (PropertyInfo)subSelection.Field.Member!;
+					var entityProperty = objectTypeEntityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
+
+					var foo = sourceExpression.Type == objectTypeEntityType
+						? sourceExpression
+						: Expression.Convert(sourceExpression, objectTypeEntityType);
+					var entityPropertyAccess = Expression.Property(foo, entityProperty);
+
+					if (subSelection.SelectionSet is null)
+					{
+						var assignment = Expression.Bind(dtoProperty, entityPropertyAccess);
+						assignments.Add(assignment);
+					}
+					else
+					{
+						var subProjection = Project(entityPropertyAccess, subSelection);
+						var assignment = Expression.Bind(
+							dtoProperty,
+							IsNullable(entityProperty) // NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
+								? Expression.Condition(
+									Expression.Equal(entityPropertyAccess, Expression.Constant(null)),
+									Expression.Constant(null, subProjection.Type), // NOTE: We have to pass the type
+									subProjection
+								)
+								: subProjection
+						);
+						assignments.Add(assignment);
+					}
+
+					if (subSelection.Field.ContextData.GetValueOrDefault(MetaContextKey) is not IEnumerable<AuthRule> authRules)
+						continue;
+
+					foreach (var rule in authRules.Where(r => r.ShouldApply?.Invoke(subSelection) ?? true))
+					{
+						metaExpressions.Add(
+							rule.Key,
+							ReplacingExpressionVisitor.Replace(
+								rule.Expression.Parameters.First(), // NOTE: We assume there's only one parameter
+								foo,
+								rule.Expression.Body
 							)
-							: subProjection
-					);
-					assignments.Add(assignment);
+						);
+					}
 				}
-
-				if (subSelection.Field.ContextData.GetValueOrDefault(MetaContextKey) is not IEnumerable<AuthRule> authRules)
-					continue;
-
-				foreach (var rule in authRules.Where(r => r.ShouldApply?.Invoke(subSelection) ?? true))
+				if (metaExpressions.Any())
 				{
-					metaExpressions.Add(
-						rule.Key,
-						ReplacingExpressionVisitor.Replace(
-							rule.Expression.Parameters.First(), // NOTE: We assume there's only one parameter
-							sourceExpression,
-							rule.Expression.Body
-						)
+					var dictType = typeof(Dictionary<string, bool>);
+					var dictInit = Expression.ListInit(
+						Expression.New(dictType),
+						metaExpressions.Select(ex => Expression.ElementInit(
+							dictType.GetMethod(nameof(Dictionary<string, bool>.Add))!,
+							Expression.Constant(ex.Key), ex.Value
+						))
 					);
+					assignments.Add(Expression.Bind(
+						objectTypeDtoType.GetProperty(nameof(BaseDto._Meta))!,
+						dictInit
+					));
 				}
-			}
-			if (metaExpressions.Any())
-			{
-				var dictType = typeof(Dictionary<string, bool>);
-				var dictInit = Expression.ListInit(
-					Expression.New(dictType),
-					metaExpressions.Select(ex => Expression.ElementInit(
-						dictType.GetMethod(nameof(Dictionary<string, bool>.Add))!,
-						Expression.Constant(ex.Key), ex.Value
-					))
+				var memberInit = Expression.MemberInit(
+					Expression.New(objectTypeDtoType),
+					assignments
 				);
-				assignments.Add(Expression.Bind(
-					dtoType.GetProperty(nameof(BaseDto._Meta))!,
-					dictInit
-				));
+				memberInitExpressions.Add(memberInit);
 			}
-			var memberInit = Expression.MemberInit(
-				Expression.New(dtoType),
-				assignments
-			);
-			return memberInit;
+
+			if (memberInitExpressions.Count == 1)
+				return memberInitExpressions.Single();
+
+			ConditionalExpression Conditionalize(int index = 0)
+			{
+				var current = memberInitExpressions[index];
+				var condition = Expression.Condition(
+					Expression.TypeIs(sourceExpression, _typeDict[current.Type]),
+					Expression.Convert(current, dtoType),
+					index == memberInitExpressions.Count - 1 // NOTE: If last index
+						? Expression.Constant(null, dtoType)
+						: Conditionalize(index + 1)
+				);
+				return condition;
+			}
+			var conditional = Conditionalize();
+			return conditional;
 		}
 	}
 

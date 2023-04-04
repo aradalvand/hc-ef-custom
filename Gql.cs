@@ -27,7 +27,7 @@ public static class Query
 	public static IQueryable<Instructor?> GetInstructor(AppDbContext db, int id) =>
 		db.Instructors.Where(a => a.Id == id);
 
-	[UseCustomProjection<LessonType>(ResultType.Multiple)]
+	[UseCustomProjection<ListType<LessonType>>(ResultType.Multiple)]
 	public static IQueryable<Lesson> GetLessons(AppDbContext db) =>
 		db.Lessons;
 

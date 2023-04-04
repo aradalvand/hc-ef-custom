@@ -20,6 +20,7 @@ app.MapGraphQL();
 app.Run();
 
 // Potential advantages:
+// - Projection of getter-only projectable properties
 // - No mappers, expression visitors + EF overhead of intermediate projections
 // - No IsProjected() on IDs + authorization rules will be fields inserted into the projection
 // - Some way we could apply an auth rule only if a specific inner field is selected (e.g. `Course.Video` and its `Id`)
