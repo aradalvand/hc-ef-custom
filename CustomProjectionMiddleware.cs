@@ -12,8 +12,6 @@ namespace hc_ef_custom;
 
 public class CustomProjectionMiddleware
 {
-	public const string MetaContextKey = "Meta";
-
 	private readonly FieldDelegate _next;
 	private readonly ResultType _resultType;
 
@@ -60,8 +58,8 @@ public class CustomProjectionMiddleware
 
 		Expression Project(Expression sourceExpression, ISelection selection)
 		{
-			var dtoType = selection.Type.NamedType().ToRuntimeType();
-			var entityType = _typeDict[dtoType];
+			Type dtoType = selection.Type.NamedType().ToRuntimeType();
+			Type entityType = _typeDict[dtoType];
 
 			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable)))
 			{
@@ -80,39 +78,46 @@ public class CustomProjectionMiddleware
 			}
 
 			List<MemberInitExpression> memberInitExpressions = new();
-			foreach (var objectType in context.Operation.GetPossibleTypes(selection))
+			foreach (IObjectType objectType in context.Operation.GetPossibleTypes(selection))
 			{
-				var objectTypeDtoType = objectType.RuntimeType;
-				var objectTypeEntityType = _typeDict[objectType.RuntimeType];
+				Type objectTypeDtoType = objectType.RuntimeType;
+				Type objectTypeEntityType = _typeDict[objectType.RuntimeType];
 
 				List<MemberAssignment> assignments = new();
 				Dictionary<string, Expression> metaExpressions = new();
-				foreach (var subSelection in context.GetSelections(objectType, selection))
+				foreach (ISelection subSelection in context.GetSelections(objectType, selection))
 				{
 					if (subSelection.Field.IsIntrospectionField)
 						continue;
 
-					var dtoProperty = (PropertyInfo)subSelection.Field.Member!;
-					var entityProperty = objectTypeEntityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
+					PropertyInfo dtoProperty = (PropertyInfo)subSelection.Field.Member!;
+					var expr = (LambdaExpression)subSelection.Field.ContextData["Foo"]!;
+					PropertyInfo entityProperty = objectTypeEntityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
 
 					var sourceExpressionConverted = sourceExpression.Type == objectTypeEntityType
 						? sourceExpression
 						: Expression.Convert(sourceExpression, objectTypeEntityType);
-					var entityPropertyAccess = Expression.Property(sourceExpressionConverted, entityProperty);
+
+					var expr2 = ReplacingExpressionVisitor.Replace(
+						expr.Parameters.First(),
+						sourceExpressionConverted,
+						expr.Body
+					);
 
 					if (subSelection.SelectionSet is null)
 					{
-						var assignment = Expression.Bind(dtoProperty, entityPropertyAccess);
+						var assignment = Expression.Bind(dtoProperty, expr2);
 						assignments.Add(assignment);
 					}
 					else
 					{
-						var subProjection = Project(entityPropertyAccess, subSelection);
+						var subProjection = Project(expr2, subSelection);
 						var assignment = Expression.Bind(
 							dtoProperty,
-							IsNullable(entityProperty) // NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
+							// NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
+							subProjection is MemberInitExpression && IsNullable(entityProperty) // TODO: Make sure this is good
 								? Expression.Condition(
-									Expression.Equal(entityPropertyAccess, Expression.Constant(null)),
+									Expression.Equal(expr2, Expression.Constant(null)),
 									Expression.Constant(null, subProjection.Type), // NOTE: We have to pass the type
 									subProjection
 								)
@@ -121,7 +126,8 @@ public class CustomProjectionMiddleware
 						assignments.Add(assignment);
 					}
 
-					if (subSelection.Field.ContextData.GetValueOrDefault(MetaContextKey) is not IEnumerable<AuthRule> authRules)
+					if (subSelection.Field.ContextData.GetValueOrDefault(WellKnownContextKeys.Meta)
+						is not IEnumerable<AuthRule> authRules)
 						continue;
 
 					foreach (var rule in authRules)
@@ -141,7 +147,7 @@ public class CustomProjectionMiddleware
 				}
 				if (metaExpressions.Any())
 				{
-					var dictType = typeof(Dictionary<string, bool>);
+					Type dictType = typeof(Dictionary<string, bool>);
 					var dictInit = Expression.ListInit(
 						Expression.New(dictType),
 						metaExpressions.Select(ex => Expression.ElementInit(
