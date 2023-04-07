@@ -15,16 +15,6 @@ public class CustomProjectionMiddleware
 	private readonly FieldDelegate _next;
 	private readonly ResultType _resultType;
 
-	private Dictionary<Type, Type> _typeDict = new() // TEMP
-	{
-		[typeof(CourseDto)] = typeof(Course),
-		[typeof(InstructorDto)] = typeof(Instructor),
-		[typeof(RatingDto)] = typeof(Rating),
-		[typeof(LessonDto)] = typeof(Lesson),
-		[typeof(VideoLessonDto)] = typeof(VideoLesson),
-		[typeof(ArticleLessonDto)] = typeof(ArticleLesson),
-	};
-
 	public CustomProjectionMiddleware(FieldDelegate next, ResultType resultType)
 	{
 		_next = next;
@@ -56,12 +46,16 @@ public class CustomProjectionMiddleware
 		Console.ResetColor();
 		Console.WriteLine("----------");
 
+		// NOTE: Note that we do as little reflection here as possible, we aim to keep the middleware as reflection-free as possible.
 		Expression Project(Expression sourceExpression, ISelection selection)
 		{
-			Type dtoType = selection.Type.NamedType().ToRuntimeType();
-			Type entityType = _typeDict[dtoType];
+			INamedType type = selection.Type.NamedType(); // NOTE: Effectively is either an interface type or an object type — shouldn't be a scalar for example — and is a "mapped type" configured via the `Mapped()` method on `IObjectTypeFieldDescriptor`.
+			var typeData = (MappedTypeData)type.ContextData[WellKnownContextKeys.MappedTypeData]!;
 
-			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable)))
+			Type dtoType = type.ToRuntimeType(); // NOTE: There's always a "DTO" CLR type behind every mapped type.
+			Type entityType = typeData.CorrespondingEntityType;
+
+			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable))) // NOTE: If the source expression is a "set", if you will, we wrap the projection in a `Select(elm => ...)` call.
 			{
 				var param = Expression.Parameter(entityType);
 				var body = Project(param, selection);
@@ -77,11 +71,12 @@ public class CustomProjectionMiddleware
 				return select;
 			}
 
-			List<MemberInitExpression> memberInitExpressions = new();
+			Dictionary<IObjectType, MemberInitExpression> objectProjections = new();
 			foreach (IObjectType objectType in context.Operation.GetPossibleTypes(selection))
 			{
+				var objectTypeData = (MappedTypeData)objectType.ContextData[WellKnownContextKeys.MappedTypeData]!;
 				Type objectTypeDtoType = objectType.RuntimeType;
-				Type objectTypeEntityType = _typeDict[objectType.RuntimeType];
+				Type objectTypeEntityType = objectTypeData.CorrespondingEntityType;
 
 				List<MemberAssignment> assignments = new();
 				Dictionary<string, Expression> metaExpressions = new();
@@ -91,33 +86,31 @@ public class CustomProjectionMiddleware
 						continue;
 
 					PropertyInfo dtoProperty = (PropertyInfo)subSelection.Field.Member!;
-					var expr = (LambdaExpression)subSelection.Field.ContextData["Foo"]!;
-					PropertyInfo entityProperty = objectTypeEntityType.GetProperty(dtoProperty.Name)!; // TODO: Improve this logic
-
+					var fieldData = (MappedFieldData)subSelection.Field.ContextData[WellKnownContextKeys.MappedFieldData]!;
 					var sourceExpressionConverted = sourceExpression.Type == objectTypeEntityType
 						? sourceExpression
 						: Expression.Convert(sourceExpression, objectTypeEntityType);
 
-					var expr2 = ReplacingExpressionVisitor.Replace(
-						expr.Parameters.First(),
+					var fieldExpression = ReplacingExpressionVisitor.Replace(
+						fieldData.Expression.Parameters.First(),
 						sourceExpressionConverted,
-						expr.Body
+						fieldData.Expression.Body
 					);
 
 					if (subSelection.SelectionSet is null)
 					{
-						var assignment = Expression.Bind(dtoProperty, expr2);
+						var assignment = Expression.Bind(dtoProperty, fieldExpression);
 						assignments.Add(assignment);
 					}
 					else
 					{
-						var subProjection = Project(expr2, subSelection);
+						var subProjection = Project(fieldExpression, subSelection);
 						var assignment = Expression.Bind(
 							dtoProperty,
 							// NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
-							subProjection is MemberInitExpression && IsNullable(entityProperty) // TODO: Make sure this is good
+							subProjection is MemberInitExpression && fieldData.Expression.Body is MemberExpression m && false // todo
 								? Expression.Condition(
-									Expression.Equal(expr2, Expression.Constant(null)),
+									Expression.Equal(fieldExpression, Expression.Constant(null)),
 									Expression.Constant(null, subProjection.Type), // NOTE: We have to pass the type
 									subProjection
 								)
@@ -126,7 +119,7 @@ public class CustomProjectionMiddleware
 						assignments.Add(assignment);
 					}
 
-					if (subSelection.Field.ContextData.GetValueOrDefault(WellKnownContextKeys.Meta)
+					if (subSelection.Field.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData)
 						is not IEnumerable<AuthRule> authRules)
 						continue;
 
@@ -135,12 +128,13 @@ public class CustomProjectionMiddleware
 						if (rule.ShouldApply?.Invoke(subSelection) == false)
 							continue;
 
+						var ruleExpr = rule.Expression(null);
 						metaExpressions.Add(
 							rule.Key,
 							ReplacingExpressionVisitor.Replace(
-								rule.Expression.Parameters.First(), // NOTE: We assume there's only one parameter
+								ruleExpr.Parameters.First(), // NOTE: We assume there's only one parameter
 								sourceExpressionConverted,
-								rule.Expression.Body
+								ruleExpr.Body
 							)
 						);
 					}
@@ -164,19 +158,22 @@ public class CustomProjectionMiddleware
 					Expression.New(objectTypeDtoType),
 					assignments
 				);
-				memberInitExpressions.Add(memberInit);
+				objectProjections.Add(objectType, memberInit);
 			}
 
-			return memberInitExpressions.Count > 1
-				? memberInitExpressions.Aggregate(
+			return objectProjections.Count > 1
+				? objectProjections.Aggregate(
 					Expression.Constant(null, dtoType) as Expression,
 					(accumulator, current) => Expression.Condition(
-						Expression.TypeIs(sourceExpression, _typeDict[current.Type]),
-						Expression.Convert(current, dtoType), // NOTE: The conversion is necessary — or else we get an exception, the two sides of a ternary expression should be of the same type.
+						Expression.TypeIs(
+							sourceExpression,
+							(current.Key.ContextData[WellKnownContextKeys.MappedTypeData] as MappedTypeData)!.CorrespondingEntityType // todo: horrendous
+						),
+						Expression.Convert(current.Value, dtoType), // NOTE: The conversion is necessary — or else we get an exception, the two sides of a ternary expression should be of the same type.
 						accumulator
 					)
 				)
-				: memberInitExpressions.Single();
+				: objectProjections.Single().Value;
 		}
 	}
 
