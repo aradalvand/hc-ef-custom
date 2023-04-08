@@ -87,6 +87,7 @@ public class CustomProjectionMiddleware
 
 					PropertyInfo dtoProperty = (PropertyInfo)subSelection.Field.Member!;
 					var fieldData = (MappedFieldData)subSelection.Field.ContextData[WellKnownContextKeys.MappedFieldData]!;
+
 					var sourceExpressionConverted = sourceExpression.Type == objectTypeEntityType
 						? sourceExpression
 						: Expression.Convert(sourceExpression, objectTypeEntityType);
@@ -108,7 +109,7 @@ public class CustomProjectionMiddleware
 						var assignment = Expression.Bind(
 							dtoProperty,
 							// NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
-							subProjection is MemberInitExpression && fieldData.Expression.Body is MemberExpression m && false // todo
+							IsNullable(dtoProperty) // todo
 								? Expression.Condition(
 									Expression.Equal(fieldExpression, Expression.Constant(null)),
 									Expression.Constant(null, subProjection.Type), // NOTE: We have to pass the type
@@ -128,7 +129,7 @@ public class CustomProjectionMiddleware
 						if (rule.ShouldApply?.Invoke(subSelection) == false)
 							continue;
 
-						var ruleExpr = rule.Expression(null);
+						var ruleExpr = rule.Expression(null!); // todo
 						metaExpressions.Add(
 							rule.Key,
 							ReplacingExpressionVisitor.Replace(

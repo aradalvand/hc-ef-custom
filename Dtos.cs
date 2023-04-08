@@ -1,6 +1,4 @@
 using System.ComponentModel;
-using System.Linq.Expressions;
-using hc_ef_custom.Types;
 
 namespace hc_ef_custom;
 
@@ -17,6 +15,7 @@ public abstract class BaseDto
 	[EditorBrowsable(EditorBrowsableState.Never)]
 	public IDictionary<string, bool> _Meta { get; init; } = default!;
 }
+// TODO: Could probably also be record (with the special syntax) without any change to the projection middleware
 public class CourseDto : BaseDto
 {
 	public string Title { get; init; } = default!;
