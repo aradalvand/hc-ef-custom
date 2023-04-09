@@ -3,7 +3,6 @@
 [QueryType]
 public class Query
 {
-	// public string Foo => "Hi";
 	[UseCustomProjection(ResultType.Single)]
 	public IQueryable<Course> GetCourse(AppDbContext db, int id) =>
 		db.Courses.Where(b => b.Id == id);

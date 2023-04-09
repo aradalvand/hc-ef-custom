@@ -69,8 +69,6 @@ public class Test1<TDto> where TDto : BaseDto
 				var dtoProp = (PropertyInfo)field.Member; // NOTE: We assume the member behind the field is a property (and this assumption in practically safe in our case, although not safe in principle, if you will)
 				var namesakeEntityProp = typeof(TEntity).GetProperty(dtoProp.Name); // NOTE: Property on the entity type with the same name.
 
-				var extendedType = c.TypeInspector.GetReturnType(field.Member);
-				Console.WriteLine($"extendedType: {extendedType}");
 				Type foo = null;
 				if (namesakeEntityProp is null ||
 					(!namesakeEntityProp.PropertyType.IsAssignableTo(dtoProp.PropertyType) && // NOTE: We check "assignability" and not equality because the entity prop might be, for example, ICollection while
@@ -255,25 +253,26 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 	{
 		descriptor.Use((_, next) => new CustomProjectionMiddleware(next, _resultType));
 
-		// descriptor.Type<CourseType>();
 		descriptor.Extend().OnBeforeCreate((c, d) =>
 		{
 			if (d.ResultType is null ||
 				!d.ResultType.IsAssignableTo(typeof(IQueryable<object>)))
 				throw new InvalidOperationException($"Resolvers on which the custom projection middleware is used must return an `IQueryable<object>`, while this resolver returns `{d.ResultType}`.");
 
+			// NOTE: In part inspired by https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
 			var typeInfo = c.TypeInspector.CreateTypeInfo(d.ResultType);
-			var namedType = typeInfo.NamedType;
-
-			var entityType = d.ResultType.GetGenericArguments().First();
+			var entityType = typeInfo.NamedType;
 			var correspondingDtoType = _typeDict2[entityType];
 			var resultingType = _resultType switch
 			{
-				ResultType.Single => correspondingDtoType,
-				ResultType.Multiple => typeof(IEnumerable<>).MakeGenericType(correspondingDtoType),
+				ResultType.Single => c.TypeInspector.GetType(correspondingDtoType), // NOTE: Similar to the behavior of Hot Chocolate's own `UseSingleOrDefault` middleware, which always makes the resulting singular type nullable, regardless of the original type's nullability, hence the "OrDefault" part. This is because the set (that the IQueryable represents) might be empty, in which case it has to return null for the field.
+				ResultType.Multiple => c.TypeInspector.GetType(
+					typeof(IEnumerable<>).MakeGenericType(correspondingDtoType),
+					false, false // NOTE: Non-nullable list with non-nullable elements
+				),
 				_ => throw new ArgumentOutOfRangeException(),
 			};
-			d.Type = c.TypeInspector.GetTypeRef(resultingType, TypeContext.Output);
+			d.Type = TypeReference.Create(resultingType);
 		});
 	}
 }
