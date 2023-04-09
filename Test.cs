@@ -256,24 +256,23 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 
 		descriptor.Extend().OnBeforeCreate((c, d) =>
 		{
-			if (d.ResultType is null ||
+			if (d.Type is not ExtendedTypeReference typeRef ||
+				d.ResultType is null ||
 				!d.ResultType.IsAssignableTo(typeof(IQueryable<object>)))
-				throw new InvalidOperationException($"Resolvers on which the custom projection middleware is used must return an `IQueryable<object>`, while this resolver returns `{d.ResultType}`.");
+				throw new InvalidOperationException();
 
 			// NOTE: In part inspired by https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
-			var type = (d.Type as ExtendedTypeReference)!.Type;
-			var entityType = c.TypeInspector.CreateTypeInfo(type).NamedType; // TODO: I don't know why `c.TypeInspector.ExtractNamedType` doesn't work here
+			var entityType = c.TypeInspector.CreateTypeInfo(typeRef.Type).NamedType; // TODO: I don't know why `c.TypeInspector.ExtractNamedType` doesn't work here
 			var correspondingDtoType = _typeDict2[entityType];
-			var resultingType = _resultType switch
+			d.Type = TypeReference.Create(_resultType switch
 			{
 				ResultType.Single => c.TypeInspector.GetType(correspondingDtoType), // NOTE: Similar to the behavior of Hot Chocolate's own `UseSingleOrDefault` middleware, which always makes the resulting singular type nullable, regardless of the original type's nullability, hence the "OrDefault" part. This is because the set (that the IQueryable represents) might be empty, in which case it has to return null for the field.
 				ResultType.Multiple => c.TypeInspector.GetType(
 					typeof(IEnumerable<>).MakeGenericType(correspondingDtoType),
-					c.TypeInspector.CollectNullability(type) // NOTE: Preserve the nullability information of the original type
+					c.TypeInspector.CollectNullability(typeRef.Type) // NOTE: Preserve the nullability state of the original type
 				),
 				_ => throw new ArgumentOutOfRangeException(),
-			};
-			d.Type = TypeReference.Create(resultingType);
+			});
 		});
 	}
 }

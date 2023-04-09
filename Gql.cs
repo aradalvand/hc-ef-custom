@@ -12,6 +12,6 @@ public class Query
 		db.Instructors.Where(a => a.Id == id);
 
 	[UseCustomProjection(ResultType.Multiple)]
-	public IQueryable<Lesson>? GetLessons(AppDbContext db) =>
+	public IQueryable<Lesson> GetLessons(AppDbContext db) =>
 		db.Lessons;
 }
