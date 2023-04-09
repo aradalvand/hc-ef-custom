@@ -25,12 +25,12 @@ public record MappedFieldData(
 
 public static class ObjectTypeDescriptorExtensions
 {
-	public static Test1<TDto> Mapped<TDto>(this IObjectTypeDescriptor<TDto> descriptor) where TDto : BaseDto // TODO: One for interface types
+	public static Test1<TDto> Mapped<TDto>(this IObjectTypeDescriptor<TDto> descriptor) where TDto : BaseDto
 	{
 		return new(descriptor);
 	}
 
-	// public static Test1<TDto> Mapped<TDto>(this IInterfaceTypeDescriptor<TDto> descriptor) where TDto : BaseDto // TODO: One for interface types
+	// public static Test1<TDto> Mapped<TDto>(this IInterfaceTypeDescriptor<TDto> descriptor) where TDto : BaseDto
 	// {
 	// 	return new(descriptor);
 	// }
@@ -60,17 +60,22 @@ public class Test1<TDto> where TDto : BaseDto
 
 		_descriptor.Extend().OnBeforeCompletion((c, d) =>
 		{
+			Console.WriteLine("---");
+			Console.ForegroundColor = ConsoleColor.Yellow;
 			Console.WriteLine($"OnBeforeCompletion: {typeof(TDto).Name}");
+			Console.ResetColor();
 			foreach (var field in d.Fields) // NOTE: We examine the type's fields right before the configuration is all done so that we operate upon exactly the fields that are going to be part of the type in the schema. The user might have removed (ignored) or added fields before this.
 			{
 				if (field.IsIntrospectionField)
 					continue;
 
+				Console.WriteLine("--");
 				Console.WriteLine($"Field: {field}");
 				if (field.Member is null)
 					throw new InvalidOperationException("All fields in a mapped type must correspond to a property on the DTO type.");  // NOTE: This prevents the user from creating arbitrary new fields (e.g. `descriptor.Field("FooBar")`).
 
 				var fieldData = field.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData) as MappedFieldData;
+				Console.WriteLine($"field.ContextData.Count: {field.ContextData.Count}");
 				if (fieldData?.Expression is not null)
 					continue;
 

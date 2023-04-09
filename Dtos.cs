@@ -11,7 +11,6 @@ public abstract class BaseDto
 {
 	public int Id { get; init; } = default!;
 
-	[GraphQLIgnore]
 	[EditorBrowsable(EditorBrowsableState.Never)]
 	public IDictionary<string, bool> _Meta { get; init; } = default!;
 }
@@ -89,7 +88,7 @@ public class LessonType : InterfaceType<LessonDto>
 {
 	protected override void Configure(IInterfaceTypeDescriptor<LessonDto> descriptor)
 	{
-		// descriptor.Mapped().To<Lesson>();
+		descriptor.Mapped().To<Lesson>();
 	}
 }
 public class VideoLessonType : ObjectType<VideoLessonDto>
