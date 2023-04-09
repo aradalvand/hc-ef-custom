@@ -253,32 +253,28 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 		MemberInfo member
 	)
 	{
-		Console.WriteLine("UseCustomProjection");
-		// descriptor.Type<T>();
-		descriptor.Extend().OnBeforeCreate((context, definition) =>
-		{
-			if (definition.ResultType is null ||
-				!definition.ResultType.IsAssignableTo(typeof(IQueryable<object>)))
-				throw new InvalidOperationException($"Resolvers on which the custom projection middleware is used must return an `IQueryable<object>`, while this resolver returns `{definition.ResultType}`.");
-
-			Console.WriteLine($"definition.ResultType: {definition.ResultType}");
-			var typeInfo = context.TypeInspector.CreateTypeInfo(definition.ResultType);
-			Console.WriteLine($"typeInfo: {typeInfo}");
-			var namedType = typeInfo.NamedType;
-			Console.WriteLine($"typeInfo.NamedType: {typeInfo.NamedType}");
-			var selectionType = _typeDict2[namedType];
-			definition.ResultType = selectionType;
-			definition.Type = context.TypeInspector.GetTypeRef(selectionType, TypeContext.Output);
-			// definition.Type = context.TypeInspector.GetTypeRef()
-			// https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
-			// var typeInfo = context.TypeInspector.CreateTypeInfo(definition.ResultType!);
-			// Console.WriteLine($"typeInfo: {typeInfo}");
-
-			// var typeRef = context.TypeInspector.GetTypeRef(typeInfo.NamedType, TypeContext.Output);
-			// Console.WriteLine($"typeRef: {typeRef}");
-			// definition.Type = typeRef;
-		});
 		descriptor.Use((_, next) => new CustomProjectionMiddleware(next, _resultType));
+
+		// descriptor.Type<CourseType>();
+		descriptor.Extend().OnBeforeCreate((c, d) =>
+		{
+			if (d.ResultType is null ||
+				!d.ResultType.IsAssignableTo(typeof(IQueryable<object>)))
+				throw new InvalidOperationException($"Resolvers on which the custom projection middleware is used must return an `IQueryable<object>`, while this resolver returns `{d.ResultType}`.");
+
+			var typeInfo = c.TypeInspector.CreateTypeInfo(d.ResultType);
+			var namedType = typeInfo.NamedType;
+
+			var entityType = d.ResultType.GetGenericArguments().First();
+			var correspondingDtoType = _typeDict2[entityType];
+			var resultingType = _resultType switch
+			{
+				ResultType.Single => correspondingDtoType,
+				ResultType.Multiple => typeof(IEnumerable<>).MakeGenericType(correspondingDtoType),
+				_ => throw new ArgumentOutOfRangeException(),
+			};
+			d.Type = c.TypeInspector.GetTypeRef(resultingType, TypeContext.Output);
+		});
 	}
 }
 

@@ -59,7 +59,6 @@ public class Instructor : BaseEntity
 	public ICollection<Course> Courses { get; set; } = default!;
 }
 
-[InterfaceType]
 public abstract class Lesson : BaseEntity
 {
 	public required int CourseId { get; set; }
@@ -75,18 +74,4 @@ public class VideoLesson : Lesson
 public class ArticleLesson : Lesson
 {
 	public required string Text { get; set; }
-}
-
-
-public class VideoLesson2Type : ObjectType<VideoLesson>
-{
-	protected override void Configure(IObjectTypeDescriptor<VideoLesson> descriptor)
-	{
-	}
-}
-public class ArticleLesson2Type : ObjectType<ArticleLesson>
-{
-	protected override void Configure(IObjectTypeDescriptor<ArticleLesson> descriptor)
-	{
-	}
 }
