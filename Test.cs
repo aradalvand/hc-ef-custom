@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using HotChocolate.Execution.Processing;
 using HotChocolate.Types.Descriptors;
 
@@ -260,15 +261,15 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 				throw new InvalidOperationException($"Resolvers on which the custom projection middleware is used must return an `IQueryable<object>`, while this resolver returns `{d.ResultType}`.");
 
 			// NOTE: In part inspired by https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
-			var typeInfo = c.TypeInspector.CreateTypeInfo(d.ResultType);
-			var entityType = typeInfo.NamedType;
+			var type = (d.Type as ExtendedTypeReference)!.Type;
+			var entityType = c.TypeInspector.CreateTypeInfo(type).NamedType; // TODO: I don't know why `c.TypeInspector.ExtractNamedType` doesn't work here
 			var correspondingDtoType = _typeDict2[entityType];
 			var resultingType = _resultType switch
 			{
 				ResultType.Single => c.TypeInspector.GetType(correspondingDtoType), // NOTE: Similar to the behavior of Hot Chocolate's own `UseSingleOrDefault` middleware, which always makes the resulting singular type nullable, regardless of the original type's nullability, hence the "OrDefault" part. This is because the set (that the IQueryable represents) might be empty, in which case it has to return null for the field.
 				ResultType.Multiple => c.TypeInspector.GetType(
 					typeof(IEnumerable<>).MakeGenericType(correspondingDtoType),
-					false, false // NOTE: Non-nullable list with non-nullable elements
+					c.TypeInspector.CollectNullability(type) // NOTE: Preserve the nullability information of the original type
 				),
 				_ => throw new ArgumentOutOfRangeException(),
 			};

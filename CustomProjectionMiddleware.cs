@@ -26,7 +26,7 @@ public class CustomProjectionMiddleware
 		await _next(context);
 
 		if (context.Result is not IQueryable<object> query)
-			throw new InvalidOperationException();
+			return;
 
 		query = query.Provider.CreateQuery<object>(
 			Project(query.Expression, context.Selection)
