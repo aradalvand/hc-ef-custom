@@ -50,18 +50,16 @@ public class CustomProjectionMiddleware
 		Expression Project(Expression sourceExpression, ISelection selection)
 		{
 			INamedType type = selection.Type.NamedType(); // NOTE: Effectively is either an interface type or an object type — shouldn't be a scalar for example — and is a "mapped type" configured via the `Mapped()` method on `IObjectTypeFieldDescriptor`.
-			var typeData = (MappedTypeData)type.ContextData[WellKnownContextKeys.MappedTypeData]!;
-
 			Type dtoType = type.ToRuntimeType(); // NOTE: There's always a "DTO" CLR type behind every mapped type.
-			Type entityType = typeData.CorrespondingEntityType;
+			Type entityType = TypeMapping.Dictionary[dtoType];
 
-			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable))) // NOTE: If the source expression is a "set", if you will, we wrap the projection in a `Select(elm => ...)` call.
+			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable<object>))) // NOTE: If the source expression is a "set", if you will, we wrap the projection in a `Select(elm => ...)` call.
 			{
 				var param = Expression.Parameter(entityType);
 				var body = Project(param, selection);
 				var lambda = Expression.Lambda(body, param);
 				var select = Expression.Call(
-					sourceExpression.Type.IsAssignableTo(typeof(IQueryable))
+					sourceExpression.Type.IsAssignableTo(typeof(IQueryable<object>))
 						? typeof(Queryable)
 						: typeof(Enumerable),
 					nameof(Enumerable.Select),
@@ -74,9 +72,8 @@ public class CustomProjectionMiddleware
 			Dictionary<IObjectType, MemberInitExpression> objectProjections = new();
 			foreach (IObjectType objectType in context.Operation.GetPossibleTypes(selection))
 			{
-				var objectTypeData = (MappedTypeData)objectType.ContextData[WellKnownContextKeys.MappedTypeData]!;
 				Type objectTypeDtoType = objectType.RuntimeType;
-				Type objectTypeEntityType = objectTypeData.CorrespondingEntityType;
+				Type objectTypeEntityType = TypeMapping.Dictionary[objectTypeDtoType];
 
 				List<MemberAssignment> assignments = new();
 				Dictionary<string, Expression> metaExpressions = new();
@@ -168,7 +165,7 @@ public class CustomProjectionMiddleware
 					(accumulator, current) => Expression.Condition(
 						Expression.TypeIs(
 							sourceExpression,
-							(current.Key.ContextData[WellKnownContextKeys.MappedTypeData] as MappedTypeData)!.CorrespondingEntityType // todo: horrendous
+							TypeMapping.Dictionary[current.Key.RuntimeType]
 						),
 						Expression.Convert(current.Value, dtoType), // NOTE: The conversion is necessary — or else we get an exception, the two sides of a ternary expression should be of the same type.
 						accumulator

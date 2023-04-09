@@ -21,7 +21,7 @@ public class CourseDto : BaseDto
 	public string Title { get; init; } = default!;
 	public double AverageRating { get; init; } = default!;
 	public int LessonsCount { get; init; } = default!;
-	// public InstructorDto Instructor { get; init; } = default!;
+	public InstructorDto Instructor { get; init; } = default!;
 	// public IEnumerable<LessonDto> Lessons { get; init; } = default!;
 }
 
@@ -63,16 +63,11 @@ public class CourseType : ObjectType<CourseDto>
 	{
 		descriptor.Mapped().To<Course>(d =>
 		{
-			// d.Map(c => c.LessonsCount).To(c => c.Lessons.Count);
-			// d.UseAuth(c => c.LessonsCount)
-			// 	.MustBeAuthenticated();
-			// 	.Must(c => c.Ratings.Any(r => r.Stars > 3));
-
-			d.Property(c => c.LessonsCount).MapTo(c => c.Lessons.Count);
-			// 	.UseAuth(x => x
-			// 		.MustBeAuthenticated()
-			// 		.Must(currentUser => c => c.Ratings.Any(r => r.Stars > currentUser.Id))
-			// 	);
+			d.Property(c => c.LessonsCount).MapTo(c => c.Lessons.Count)
+				.UseAuth(x => x
+					.MustBeAuthenticated()
+					.Must(currentUser => c => c.Ratings.Any(r => r.Stars > currentUser.Id))
+				);
 		});
 	}
 }
@@ -80,14 +75,14 @@ public class InstructorType : ObjectType<InstructorDto>
 {
 	protected override void Configure(IObjectTypeDescriptor<InstructorDto> descriptor)
 	{
-		// descriptor.Mapped().To<Instructor>();
+		descriptor.Mapped().To<Instructor>();
 	}
 }
 public class RatingType : ObjectType<RatingDto>
 {
 	protected override void Configure(IObjectTypeDescriptor<RatingDto> descriptor)
 	{
-		// descriptor.Mapped().To<Rating>();
+		descriptor.Mapped().To<Rating>();
 	}
 }
 public class LessonType : InterfaceType<LessonDto>
@@ -101,13 +96,13 @@ public class VideoLessonType : ObjectType<VideoLessonDto>
 {
 	protected override void Configure(IObjectTypeDescriptor<VideoLessonDto> descriptor)
 	{
-		// descriptor.Mapped().To<VideoLesson>();
+		descriptor.Mapped().To<VideoLesson>();
 	}
 }
 public class ArticleLessonType : ObjectType<ArticleLessonDto>
 {
 	protected override void Configure(IObjectTypeDescriptor<ArticleLessonDto> descriptor)
 	{
-		// descriptor.Mapped().To<ArticleLesson>();
+		descriptor.Mapped().To<ArticleLesson>();
 	}
 }
