@@ -8,21 +8,6 @@ using HotChocolate.Types.Descriptors;
 
 namespace hc_ef_custom;
 
-public static class WellKnownContextKeys
-{
-	public const string MappedTypeData = nameof(MappedTypeData);
-	public const string MappedFieldData = nameof(MappedFieldData);
-}
-
-public record MappedTypeData(
-	Type CorrespondingEntityType
-);
-
-public record MappedFieldData(
-	LambdaExpression Expression,
-	bool CheckForNull
-);
-
 public static class ObjectTypeDescriptorExtensions
 {
 	public static Test1<TDto> Mapped<TDto>(this IObjectTypeDescriptor<TDto> descriptor) where TDto : BaseDto
@@ -54,8 +39,8 @@ public class Test1<TDto> where TDto : BaseDto
 		_descriptor.Extend().OnBeforeCreate((c, d) =>
 		{
 			Console.WriteLine($"OnBeforeCreate: {typeof(TDto).Name}");
-			TypeMapping.Dictionary.Add(typeof(TEntity), typeof(TDto));
-			TypeMapping.Dictionary.Add(typeof(TDto), typeof(TEntity));
+			Mappings.Types[typeof(TEntity)] = typeof(TDto);
+			Mappings.Types[typeof(TDto)] = typeof(TEntity);
 		});
 
 		_descriptor.Extend().OnBeforeCompletion((c, d) =>
@@ -69,19 +54,26 @@ public class Test1<TDto> where TDto : BaseDto
 				if (field.IsIntrospectionField)
 					continue;
 
-				Console.WriteLine("--");
+				Console.WriteLine("-");
 				Console.WriteLine($"Field: {field}");
 				if (field.Member is null)
 					throw new InvalidOperationException("All fields in a mapped type must correspond to a property on the DTO type.");  // NOTE: This prevents the user from creating arbitrary new fields (e.g. `descriptor.Field("FooBar")`).
 
-				var fieldData = field.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData) as MappedFieldData;
-				Console.WriteLine($"field.ContextData.Count: {field.ContextData.Count}");
-				if (fieldData?.Expression is not null)
+				var dtoProp = (PropertyInfo)field.Member; // NOTE: We assume the member behind the field is a property (and this assumption in practically safe in our case, although not safe in principle, if you will)
+
+				if (Mappings.Properties.ContainsKey(dtoProp))
 					continue;
 
-				var dtoProp = (PropertyInfo)field.Member; // NOTE: We assume the member behind the field is a property (and this assumption in practically safe in our case, although not safe in principle, if you will)
-				var namesakeEntityProp = typeof(TEntity).GetProperty(dtoProp.Name); // NOTE: Property on the entity type with the same name.
+				// NOTE: Try defaulting to the expression on the base type's property, if it indeed exists:
+				var dtoBaseTypeProp = dtoProp.ReflectedType!.BaseType?.GetProperty(dtoProp.Name, dtoProp.PropertyType);
+				Console.WriteLine($"dtoBaseTypeProp: {dtoBaseTypeProp}");
+				if (dtoBaseTypeProp is not null && Mappings.Properties.ContainsKey(dtoBaseTypeProp))
+				{
+					Mappings.Properties[dtoProp] = Mappings.Properties[dtoBaseTypeProp];
+					continue;
+				}
 
+				var namesakeEntityProp = typeof(TEntity).GetProperty(dtoProp.Name); // NOTE: Property on the entity type with the same name.
 				if (
 					namesakeEntityProp is null ||
 					!AreAssignable(dtoProp.PropertyType, namesakeEntityProp.PropertyType)
@@ -95,14 +87,7 @@ public class Test1<TDto> where TDto : BaseDto
 				Console.ForegroundColor = ConsoleColor.Cyan;
 				Console.WriteLine($"{dtoProp.DeclaringType.Name}.{dtoProp.Name} = {body.ToReadableString()}");
 				Console.ResetColor();
-				// TODO: Far too much work:
-				if (fieldData is null)
-					field.ContextData[WellKnownContextKeys.MappedFieldData] = new MappedFieldData(expression, false);
-				else
-					field.ContextData[WellKnownContextKeys.MappedFieldData] = fieldData with
-					{
-						Expression = expression
-					};
+				Mappings.Properties[dtoProp] = expression;
 
 				static bool AreAssignable(Type dtoProp, Type entityProp)
 				{
@@ -119,7 +104,7 @@ public class Test1<TDto> where TDto : BaseDto
 						entityProp = entityProp.GetGenericArguments().First();
 						dtoProp = dtoProp.GetGenericArguments().First();
 					}
-					var entityPropDtoType = TypeMapping.Dictionary.GetValueOrDefault(entityProp);
+					var entityPropDtoType = Mappings.Types.GetValueOrDefault(entityProp);
 					if (entityPropDtoType is not null && dtoProp.IsAssignableFrom(entityPropDtoType))
 						return true;
 
@@ -162,15 +147,7 @@ public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
-			var fieldData = d.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData) as MappedFieldData;
-			// TODO: Far too much work:
-			if (fieldData is null)
-				d.ContextData[WellKnownContextKeys.MappedFieldData] = new MappedFieldData(map, false);
-			else
-				d.ContextData[WellKnownContextKeys.MappedFieldData] = fieldData with
-				{
-					Expression = map
-				};
+			Mappings.Properties[(PropertyInfo)d.Member!] = map;
 		});
 		return this;
 	}
@@ -256,11 +233,6 @@ public record AuthenticatedUser(
 	int Id
 );
 
-public static class TypeMapping // TEMP
-{
-	public static Dictionary<Type, Type> Dictionary = new();
-}
-
 public class UseCustomProjection : ObjectFieldDescriptorAttribute
 {
 	private ResultType _resultType;
@@ -287,7 +259,7 @@ public class UseCustomProjection : ObjectFieldDescriptorAttribute
 
 			// NOTE: In part inspired by https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
 			var entityType = c.TypeInspector.CreateTypeInfo(typeRef.Type).NamedType; // TODO: I don't know why `c.TypeInspector.ExtractNamedType` doesn't work here
-			var correspondingDtoType = TypeMapping.Dictionary[entityType];
+			var correspondingDtoType = Mappings.Types[entityType];
 			d.Type = TypeReference.Create(_resultType switch
 			{
 				ResultType.Single => c.TypeInspector.GetType(correspondingDtoType), // NOTE: Similar to the behavior of Hot Chocolate's own `UseSingleOrDefault` middleware, which always makes the resulting singular type nullable, regardless of the original type's nullability, hence the "OrDefault" part. This is because the set (that the IQueryable represents) might be empty, in which case it has to return null for the field.
@@ -305,4 +277,10 @@ public enum ResultType
 {
 	Single,
 	Multiple
+}
+
+public static class Mappings // TEMP
+{
+	public static Dictionary<Type, Type> Types = new();
+	public static Dictionary<PropertyInfo, LambdaExpression> Properties = new();
 }

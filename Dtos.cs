@@ -88,14 +88,20 @@ public class LessonType : InterfaceType<LessonDto>
 {
 	protected override void Configure(IInterfaceTypeDescriptor<LessonDto> descriptor)
 	{
-		descriptor.Mapped().To<Lesson>();
+		descriptor.Mapped().To<Lesson>(c =>
+		{
+			c.Property(c => c.Title).MapTo(c => "(" + c.Title + ")");
+		});
 	}
 }
 public class VideoLessonType : ObjectType<VideoLessonDto>
 {
 	protected override void Configure(IObjectTypeDescriptor<VideoLessonDto> descriptor)
 	{
-		descriptor.Mapped().To<VideoLesson>();
+		descriptor.Mapped().To<VideoLesson>(c =>
+		{
+			c.Property(c => c.Title).MapTo(c => "((" + c.Title + "))");
+		});
 	}
 }
 public class ArticleLessonType : ObjectType<ArticleLessonDto>

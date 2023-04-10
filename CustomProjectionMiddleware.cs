@@ -51,7 +51,7 @@ public class CustomProjectionMiddleware
 		{
 			INamedType type = selection.Type.NamedType(); // NOTE: Effectively is either an interface type or an object type — shouldn't be a scalar for example — and is a "mapped type" configured via the `Mapped()` method on `IObjectTypeFieldDescriptor`.
 			Type dtoType = type.ToRuntimeType(); // NOTE: There's always a "DTO" CLR type behind every mapped type.
-			Type entityType = TypeMapping.Dictionary[dtoType];
+			Type entityType = Mappings.Types[dtoType];
 
 			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable<object>))) // NOTE: If the source expression is a "set", if you will, we wrap the projection in a `Select(elm => ...)` call.
 			{
@@ -73,7 +73,7 @@ public class CustomProjectionMiddleware
 			foreach (IObjectType objectType in context.Operation.GetPossibleTypes(selection))
 			{
 				Type objectTypeDtoType = objectType.RuntimeType;
-				Type objectTypeEntityType = TypeMapping.Dictionary[objectTypeDtoType];
+				Type objectTypeEntityType = Mappings.Types[objectTypeDtoType];
 
 				List<MemberAssignment> assignments = new();
 				Dictionary<string, Expression> metaExpressions = new();
@@ -83,16 +83,16 @@ public class CustomProjectionMiddleware
 						continue;
 
 					PropertyInfo dtoProperty = (PropertyInfo)subSelection.Field.Member!;
-					var fieldData = (MappedFieldData)subSelection.Field.ContextData[WellKnownContextKeys.MappedFieldData]!;
+					var propExpr = Mappings.Properties[dtoProperty];
 
-					var sourceExpressionConverted = sourceExpression.Type == objectTypeEntityType
+					var sourceExpressionConverted = sourceExpression.Type == propExpr.Parameters.First().Type
 						? sourceExpression
 						: Expression.Convert(sourceExpression, objectTypeEntityType);
 
 					var fieldExpression = ReplacingExpressionVisitor.Replace(
-						fieldData.Expression.Parameters.First(),
+						propExpr.Parameters.First(),
 						sourceExpressionConverted,
-						fieldData.Expression.Body
+						propExpr.Body
 					);
 
 					if (subSelection.SelectionSet is null)
@@ -117,25 +117,25 @@ public class CustomProjectionMiddleware
 						assignments.Add(assignment);
 					}
 
-					if (subSelection.Field.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData)
-						is not IEnumerable<AuthRule> authRules)
-						continue;
+					// if (subSelection.Field.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData)
+					// 	is not IEnumerable<AuthRule> authRules)
+					// 	continue;
 
-					foreach (var rule in authRules)
-					{
-						if (rule.ShouldApply?.Invoke(subSelection) == false)
-							continue;
+					// foreach (var rule in authRules)
+					// {
+					// 	if (rule.ShouldApply?.Invoke(subSelection) == false)
+					// 		continue;
 
-						var ruleExpr = rule.Expression(null!); // todo
-						metaExpressions.Add(
-							rule.Key,
-							ReplacingExpressionVisitor.Replace(
-								ruleExpr.Parameters.First(), // NOTE: We assume there's only one parameter
-								sourceExpressionConverted,
-								ruleExpr.Body
-							)
-						);
-					}
+					// 	var ruleExpr = rule.Expression(null!); // todo
+					// 	metaExpressions.Add(
+					// 		rule.Key,
+					// 		ReplacingExpressionVisitor.Replace(
+					// 			ruleExpr.Parameters.First(), // NOTE: We assume there's only one parameter
+					// 			sourceExpressionConverted,
+					// 			ruleExpr.Body
+					// 		)
+					// 	);
+					// }
 				}
 				if (metaExpressions.Any())
 				{
@@ -165,7 +165,7 @@ public class CustomProjectionMiddleware
 					(accumulator, current) => Expression.Condition(
 						Expression.TypeIs(
 							sourceExpression,
-							TypeMapping.Dictionary[current.Key.RuntimeType]
+							Mappings.Types[current.Key.RuntimeType]
 						),
 						Expression.Convert(current.Value, dtoType), // NOTE: The conversion is necessary — or else we get an exception, the two sides of a ternary expression should be of the same type.
 						accumulator

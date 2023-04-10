@@ -19,17 +19,17 @@ public class Test1I<TDto> where TDto : BaseDto
 		_descriptor = descriptor;
 	}
 
-	public void To<TEntity>(Action<MappingDescriptor<TDto, TEntity>>? configure = null)
+	public void To<TEntity>(Action<MappingDescriptorI<TDto, TEntity>>? configure = null)
 	{
-		// configure?.Invoke(new(_descriptor));
+		configure?.Invoke(new(_descriptor));
 
 		_descriptor.Ignore(d => d._Meta); // NOTE: We do our configuration (such as ignoring the meta property) after the user code, because we want it to take precedence.
 
 		_descriptor.Extend().OnBeforeCreate((c, d) =>
 		{
 			Console.WriteLine($"OnBeforeCreate: {typeof(TDto).Name}");
-			TypeMapping.Dictionary.Add(typeof(TEntity), typeof(TDto));
-			TypeMapping.Dictionary.Add(typeof(TDto), typeof(TEntity));
+			Mappings.Types[typeof(TEntity)] = typeof(TDto);
+			Mappings.Types[typeof(TDto)] = typeof(TEntity);
 		});
 
 		_descriptor.Extend().OnBeforeCompletion((c, d) =>
@@ -42,17 +42,15 @@ public class Test1I<TDto> where TDto : BaseDto
 			{
 				Console.WriteLine("--");
 				Console.WriteLine($"Field: {field}");
+
 				if (field.Member is null)
 					throw new InvalidOperationException("All fields in a mapped type must correspond to a property on the DTO type.");  // NOTE: This prevents the user from creating arbitrary new fields (e.g. `descriptor.Field("FooBar")`).
 
-				Console.WriteLine($"field.ContextData.Count: {field.ContextData.Count}");
-				var fieldData = field.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData) as MappedFieldData;
-				if (fieldData?.Expression is not null)
+				var dtoProp = (PropertyInfo)field.Member; // NOTE: We assume the member behind the field is a property (and this assumption in practically safe in our case, although not safe in principle, if you will)
+				if (Mappings.Properties.ContainsKey(dtoProp))
 					continue;
 
-				var dtoProp = (PropertyInfo)field.Member; // NOTE: We assume the member behind the field is a property (and this assumption in practically safe in our case, although not safe in principle, if you will)
 				var namesakeEntityProp = typeof(TEntity).GetProperty(dtoProp.Name); // NOTE: Property on the entity type with the same name.
-
 				if (
 					namesakeEntityProp is null ||
 					!AreAssignable(dtoProp.PropertyType, namesakeEntityProp.PropertyType)
@@ -66,14 +64,7 @@ public class Test1I<TDto> where TDto : BaseDto
 				Console.ForegroundColor = ConsoleColor.Cyan;
 				Console.WriteLine($"{dtoProp.DeclaringType.Name}.{dtoProp.Name} = {body.ToReadableString()}");
 				Console.ResetColor();
-				// TODO: Far too much work:
-				if (fieldData is null)
-					field.ContextData[WellKnownContextKeys.MappedFieldData] = new MappedFieldData(expression, false);
-				else
-					field.ContextData[WellKnownContextKeys.MappedFieldData] = fieldData with
-					{
-						Expression = expression
-					};
+				Mappings.Properties[dtoProp] = expression;
 
 				static bool AreAssignable(Type dtoProp, Type entityProp)
 				{
@@ -90,7 +81,7 @@ public class Test1I<TDto> where TDto : BaseDto
 						entityProp = entityProp.GetGenericArguments().First();
 						dtoProp = dtoProp.GetGenericArguments().First();
 					}
-					var entityPropDtoType = TypeMapping.Dictionary.GetValueOrDefault(entityProp);
+					var entityPropDtoType = Mappings.Types.GetValueOrDefault(entityProp);
 					if (entityPropDtoType is not null && dtoProp.IsAssignableFrom(entityPropDtoType))
 						return true;
 
@@ -98,5 +89,43 @@ public class Test1I<TDto> where TDto : BaseDto
 				}
 			}
 		});
+	}
+}
+
+public class MappingDescriptorI<TDto, TEntity>
+{
+	private readonly IInterfaceTypeDescriptor<TDto> _descriptor;
+
+	public MappingDescriptorI(IInterfaceTypeDescriptor<TDto> descriptor)
+	{
+		_descriptor = descriptor;
+	}
+
+	public PropertyMappingDescriptorI<TDto, TEntity> Property(
+		Expression<Func<TDto, object>> propertySelector
+	)
+	{
+		return new(_descriptor.Field(propertySelector));
+	}
+}
+
+public class PropertyMappingDescriptorI<TDto, TEntity>
+{
+	private readonly IInterfaceFieldDescriptor _descriptor;
+
+	public PropertyMappingDescriptorI(IInterfaceFieldDescriptor descriptor)
+	{
+		_descriptor = descriptor;
+	}
+
+	public PropertyMappingDescriptorI<TDto, TEntity> MapTo(
+		Expression<Func<TEntity, object>> map
+	)
+	{
+		_descriptor.Extend().OnBeforeCreate(d =>
+		{
+			Mappings.Properties[(PropertyInfo)d.Member!] = map;
+		});
+		return this;
 	}
 }
