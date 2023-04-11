@@ -46,7 +46,7 @@ public class CustomProjectionMiddleware
 		Console.ResetColor();
 		Console.WriteLine("----------");
 
-		// NOTE: Note that we do as little reflection here as possible, we aim to keep the middleware as reflection-free as possible.
+		// NOTE: Note that we do as little reflection here as we can, we aim to keep the middleware as reflection-free as possible.
 		Expression Project(Expression sourceExpression, ISelection selection)
 		{
 			INamedType type = selection.Type.NamedType(); // NOTE: Effectively is either an interface type or an object type — shouldn't be a scalar for example — and is a "mapped type" configured via the `Mapped()` method on `IObjectTypeFieldDescriptor`.
@@ -83,16 +83,16 @@ public class CustomProjectionMiddleware
 						continue;
 
 					PropertyInfo dtoProperty = (PropertyInfo)subSelection.Field.Member!;
-					var propExpr = Mappings.Properties[dtoProperty];
+					var propertyLambda = Mappings.PropertyExpressions[dtoProperty]; // NOTE: Here we use the dictionary's indexer, meaning that that we're basically assuming that an entry exists in the dictionary for every property, because it "should".
 
-					var sourceExpressionConverted = sourceExpression.Type == propExpr.Parameters.First().Type
-						? sourceExpression
-						: Expression.Convert(sourceExpression, objectTypeEntityType);
+					var sourceExpressionConverted = sourceExpression.Type != propertyLambda.Parameters.Single().Type // NOTE: We can safely assume there's only one parameter
+						? Expression.Convert(sourceExpression, objectTypeEntityType)
+						: sourceExpression;
 
 					var fieldExpression = ReplacingExpressionVisitor.Replace(
-						propExpr.Parameters.First(),
+						propertyLambda.Parameters.Single(),
 						sourceExpressionConverted,
-						propExpr.Body
+						propertyLambda.Body
 					);
 
 					if (subSelection.SelectionSet is null)
@@ -106,7 +106,7 @@ public class CustomProjectionMiddleware
 						var assignment = Expression.Bind(
 							dtoProperty,
 							// NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
-							IsNullable(dtoProperty) // todo
+							IsNullable(dtoProperty) // TODO
 								? Expression.Condition(
 									Expression.Equal(fieldExpression, Expression.Constant(null)),
 									Expression.Constant(null, subProjection.Type), // NOTE: We have to pass the type
@@ -117,25 +117,25 @@ public class CustomProjectionMiddleware
 						assignments.Add(assignment);
 					}
 
-					// if (subSelection.Field.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData)
-					// 	is not IEnumerable<AuthRule> authRules)
-					// 	continue;
+					if (!Mappings.PropertyAuthRules.TryGetValue(dtoProperty, out var authRules))
+						continue;
 
-					// foreach (var rule in authRules)
-					// {
-					// 	if (rule.ShouldApply?.Invoke(subSelection) == false)
-					// 		continue;
+					var currentUser = new AuthenticatedUser(1); // TODO
+					foreach (var rule in authRules)
+					{
+						if (rule.ShouldApply?.Invoke(subSelection) == false) // NOTE: If the `ShouldApply` func is null, that means the rule should apply. That's what the explicit "== false" here does.
+							continue;
 
-					// 	var ruleExpr = rule.Expression(null!); // todo
-					// 	metaExpressions.Add(
-					// 		rule.Key,
-					// 		ReplacingExpressionVisitor.Replace(
-					// 			ruleExpr.Parameters.First(), // NOTE: We assume there's only one parameter
-					// 			sourceExpressionConverted,
-					// 			ruleExpr.Body
-					// 		)
-					// 	);
-					// }
+						var ruleLambda = rule.ExpressionResolver(currentUser);
+						metaExpressions.Add(
+							rule.Key,
+							ReplacingExpressionVisitor.Replace(
+								ruleLambda.Parameters.Single(),
+								sourceExpressionConverted,
+								ruleLambda.Body
+							)
+						);
+					}
 				}
 				if (metaExpressions.Any())
 				{
@@ -152,6 +152,7 @@ public class CustomProjectionMiddleware
 						dictInit
 					));
 				}
+
 				var memberInit = Expression.MemberInit(
 					Expression.New(objectTypeDtoType),
 					assignments

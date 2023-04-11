@@ -12,7 +12,7 @@ public abstract class BaseDto
 	public int Id { get; init; } = default!;
 
 	[EditorBrowsable(EditorBrowsableState.Never)]
-	public IDictionary<string, bool> _Meta { get; init; } = default!;
+	public IReadOnlyDictionary<string, bool> _Meta { get; init; } = default!;
 }
 // TODO: Could probably also be record (with the special syntax) without any change to the projection middleware
 public class CourseDto : BaseDto
@@ -62,6 +62,10 @@ public class CourseType : ObjectType<CourseDto>
 	{
 		descriptor.Mapped().To<Course>(d =>
 		{
+			d.Property(c => c.Title)
+				.UseAuth(x => x
+					.Must(currentUser => c => c.Lessons.Count() > currentUser.Id)
+				);
 			d.Property(c => c.LessonsCount).MapTo(c => c.Lessons.Count)
 				.UseAuth(x => x
 					.MustBeAuthenticated()

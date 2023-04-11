@@ -5,6 +5,7 @@ builder.Services.AddDbContextPool<AppDbContext>(o => o
 		@"Host=localhost;Username=postgres;Password=123456;Database=hc_ef_custom"
 	// o => o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)
 	)
+	.EnableSensitiveDataLogging()
 	.UseProjectables()
 );
 

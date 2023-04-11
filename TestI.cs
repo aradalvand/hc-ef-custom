@@ -47,7 +47,7 @@ public class Test1I<TDto> where TDto : BaseDto
 					throw new InvalidOperationException("All fields in a mapped type must correspond to a property on the DTO type.");  // NOTE: This prevents the user from creating arbitrary new fields (e.g. `descriptor.Field("FooBar")`).
 
 				var dtoProp = (PropertyInfo)field.Member; // NOTE: We assume the member behind the field is a property (and this assumption in practically safe in our case, although not safe in principle, if you will)
-				if (Mappings.Properties.ContainsKey(dtoProp))
+				if (Mappings.PropertyExpressions.ContainsKey(dtoProp))
 					continue;
 
 				var namesakeEntityProp = typeof(TEntity).GetProperty(dtoProp.Name); // NOTE: Property on the entity type with the same name.
@@ -64,7 +64,7 @@ public class Test1I<TDto> where TDto : BaseDto
 				Console.ForegroundColor = ConsoleColor.Cyan;
 				Console.WriteLine($"{dtoProp.DeclaringType.Name}.{dtoProp.Name} = {body.ToReadableString()}");
 				Console.ResetColor();
-				Mappings.Properties[dtoProp] = expression;
+				Mappings.PropertyExpressions[dtoProp] = expression;
 
 				static bool AreAssignable(Type dtoProp, Type entityProp)
 				{
@@ -124,7 +124,7 @@ public class PropertyMappingDescriptorI<TDto, TEntity>
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
-			Mappings.Properties[(PropertyInfo)d.Member!] = map;
+			Mappings.PropertyExpressions[(PropertyInfo)d.Member!] = map;
 		});
 		return this;
 	}

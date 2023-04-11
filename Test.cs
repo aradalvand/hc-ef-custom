@@ -61,15 +61,17 @@ public class Test1<TDto> where TDto : BaseDto
 
 				var dtoProp = (PropertyInfo)field.Member; // NOTE: We assume the member behind the field is a property (and this assumption in practically safe in our case, although not safe in principle, if you will)
 
-				if (Mappings.Properties.ContainsKey(dtoProp))
+				if (Mappings.PropertyExpressions.ContainsKey(dtoProp))
 					continue;
 
 				// NOTE: Try defaulting to the expression on the base type's property, if it indeed exists:
-				var dtoBaseTypeProp = dtoProp.ReflectedType!.BaseType?.GetProperty(dtoProp.Name, dtoProp.PropertyType);
-				Console.WriteLine($"dtoBaseTypeProp: {dtoBaseTypeProp}");
-				if (dtoBaseTypeProp is not null && Mappings.Properties.ContainsKey(dtoBaseTypeProp))
+				var dtoBaseTypeProp = dtoProp.ReflectedType!.BaseType?
+					.GetProperty(dtoProp.Name, dtoProp.PropertyType);
+				if (
+					dtoBaseTypeProp is not null &&
+					Mappings.PropertyExpressions.TryGetValue(dtoBaseTypeProp, out var expr))
 				{
-					Mappings.Properties[dtoProp] = Mappings.Properties[dtoBaseTypeProp];
+					Mappings.PropertyExpressions[dtoProp] = expr;
 					continue;
 				}
 
@@ -87,7 +89,7 @@ public class Test1<TDto> where TDto : BaseDto
 				Console.ForegroundColor = ConsoleColor.Cyan;
 				Console.WriteLine($"{dtoProp.DeclaringType.Name}.{dtoProp.Name} = {body.ToReadableString()}");
 				Console.ResetColor();
-				Mappings.Properties[dtoProp] = expression;
+				Mappings.PropertyExpressions[dtoProp] = expression;
 
 				static bool AreAssignable(Type dtoProp, Type entityProp)
 				{
@@ -147,7 +149,7 @@ public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
-			Mappings.Properties[(PropertyInfo)d.Member!] = map;
+			Mappings.PropertyExpressions[(PropertyInfo)d.Member!] = map;
 		});
 		return this;
 	}
@@ -190,27 +192,28 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 	}
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
-		Func<AuthenticatedUser, Expression<Func<TEntity, bool>>> ruleExpression
+		Func<AuthenticatedUser, Expression<Func<TEntity, bool>>> expressionResolver
 	)
 	{
-		// string key = Guid.NewGuid().ToString("N"); // Does this work?
-		// AuthRule rule = new(key, ruleExpression);
+		string key = Guid.NewGuid().ToString("N");
+		_descriptor.Extend().OnBeforeCreate(d =>
+		{
+			Mappings.PropertyAuthRules.AddValueItem(
+				(PropertyInfo)d.Member!,
+				new(key, expressionResolver)
+			);
+		});
+		_descriptor.Use(next => async context =>
+		{
+			await next(context);
 
-		// var definition = _descriptor.Extend().Definition;
-		// if (definition.ContextData.GetValueOrDefault(WellKnownContextKeys.MappedFieldData) is List<AuthRule> authRules)
-		// 	authRules.Add(rule);
-		// else
-		// 	definition.ContextData[WellKnownContextKeys.MappedFieldData] = new List<AuthRule> { rule };
-
-		// _descriptor.Use(next => async context =>
-		// {
-		// 	await next(context);
-		// 	var result = context.Parent<CourseDto>()._Meta[key];
-		// 	if (result)
-		// 		Console.WriteLine("Permitted.");
-		// 	else
-		// 		Console.WriteLine("Not permitted.");
-		// });
+			bool permitted = context.Parent<CourseDto>()._Meta[key];
+			if (!permitted)
+			{
+				context.ReportError("Not permitted");
+				context.Result = null;
+			}
+		});
 
 		return this;
 	}
@@ -218,7 +221,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 
 public record AuthRule(
 	string Key,
-	Func<AuthenticatedUser, LambdaExpression> Expression,
+	Func<AuthenticatedUser, LambdaExpression> ExpressionResolver,
 	Func<ISelection, bool>? ShouldApply = null
 );
 
@@ -281,6 +284,23 @@ public enum ResultType
 
 public static class Mappings // TEMP
 {
+	// TODO: Would be nice if the versions of these that the middleware accesses were read-only dictionaries
 	public static Dictionary<Type, Type> Types = new();
-	public static Dictionary<PropertyInfo, LambdaExpression> Properties = new();
+	public static Dictionary<PropertyInfo, LambdaExpression> PropertyExpressions = new();
+	public static Dictionary<PropertyInfo, List<AuthRule>> PropertyAuthRules = new();
+}
+
+public static class DictionaryExtensions
+{
+	public static void AddValueItem<TKey, TValueItem>(
+		this Dictionary<TKey, List<TValueItem>> dict,
+		TKey key,
+		TValueItem newValueItem
+	) where TKey : notnull
+	{
+		if (dict.TryGetValue(key, out var existingList))
+			existingList.Add(newValueItem);
+		else
+			dict.Add(key, new() { newValueItem });
+	}
 }
