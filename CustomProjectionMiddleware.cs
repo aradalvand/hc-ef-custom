@@ -21,7 +21,7 @@ public class CustomProjectionMiddleware
 		_resultType = resultType;
 	}
 
-	public async Task Invoke(IMiddlewareContext context)
+	public async Task Invoke(IMiddlewareContext context, AuthRetriever authRetriever)
 	{
 		await _next(context);
 
@@ -29,7 +29,7 @@ public class CustomProjectionMiddleware
 			return;
 
 		query = query.Provider.CreateQuery<object>(
-			Project(query.Expression, context.Selection)
+			await ProjectAsync(query.Expression, context.Selection)
 		);
 
 		context.Result = _resultType switch
@@ -47,7 +47,8 @@ public class CustomProjectionMiddleware
 		Console.WriteLine("----------");
 
 		// NOTE: Note that we do as little reflection here as we can, we aim to keep the middleware as reflection-free as possible.
-		Expression Project(Expression sourceExpression, ISelection selection)
+		// TODO: Wouldn't ValueTask be more appropriate? Since most of the time no async operation will actually end up being executed within the method.
+		async Task<Expression> ProjectAsync(Expression sourceExpression, ISelection selection)
 		{
 			INamedType type = selection.Type.NamedType(); // NOTE: Effectively is either an interface type or an object type — shouldn't be a scalar for example — and is a "mapped type" configured via the `Mapped()` method on `IObjectTypeFieldDescriptor`.
 			Type dtoType = type.ToRuntimeType(); // NOTE: There's always a "DTO" CLR type behind every mapped type.
@@ -56,7 +57,7 @@ public class CustomProjectionMiddleware
 			if (sourceExpression.Type.IsAssignableTo(typeof(IEnumerable<object>))) // NOTE: If the source expression is a "set", if you will, we wrap the projection in a `Select(elm => ...)` call.
 			{
 				var param = Expression.Parameter(entityType);
-				var body = Project(param, selection);
+				var body = await ProjectAsync(param, selection);
 				var lambda = Expression.Lambda(body, param);
 				var select = Expression.Call(
 					sourceExpression.Type.IsAssignableTo(typeof(IQueryable<object>))
@@ -82,7 +83,25 @@ public class CustomProjectionMiddleware
 					if (subSelection.Field.IsIntrospectionField)
 						continue;
 
-					PropertyInfo dtoProperty = (PropertyInfo)subSelection.Field.Member!;
+					PropertyInfo dtoProperty = (PropertyInfo)subSelection.Field.Member!; // NOTE: We can safely assume that the field corresponds to a property.
+
+					// TODO: How about we do this in the field middlewares?
+					if (Mappings.PropertyAuthPreRules.TryGetValue(dtoProperty, out var preRules))
+					{
+						foreach (var preRule in preRules)
+						{
+							bool passed = preRule.Invoke(await authRetriever.GetAsync());
+							if (!passed)
+							{
+								// TODO: Accumulate all the errors or just report the first one?
+								throw new GraphQLException(new Error(
+									message: "دسترسی مجاز نیست.",
+									code: "NOT_AUTHORIZED"
+								));
+							}
+						}
+					}
+
 					var propertyLambda = Mappings.PropertyExpressions[dtoProperty]; // NOTE: Here we use the dictionary's indexer, meaning that that we're basically assuming that an entry exists in the dictionary for every property, because it "should".
 
 					var sourceExpressionConverted = sourceExpression.Type != propertyLambda.Parameters.Single().Type // NOTE: We can safely assume there's only one parameter
@@ -102,7 +121,7 @@ public class CustomProjectionMiddleware
 					}
 					else
 					{
-						var subProjection = Project(fieldExpression, subSelection);
+						var subProjection = await ProjectAsync(fieldExpression, subSelection);
 						var assignment = Expression.Bind(
 							dtoProperty,
 							// NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
@@ -117,28 +136,28 @@ public class CustomProjectionMiddleware
 						assignments.Add(assignment);
 					}
 
-					if (!Mappings.PropertyAuthRules.TryGetValue(dtoProperty, out var authRules))
-						continue;
-
-					var currentUser = new AuthenticatedUser(1); // TODO
-					foreach (var rule in authRules)
+					if (Mappings.PropertyAuthRules.TryGetValue(dtoProperty, out var authRules))
 					{
-						if (rule.ShouldApply?.Invoke(subSelection) == false) // NOTE: If the `ShouldApply` func is null, that means the rule should apply. That's what the explicit "== false" here does.
-							continue;
+						foreach (var rule in authRules)
+						{
+							if (rule.ShouldApply?.Invoke(subSelection) == false) // NOTE: If the `ShouldApply` func is null, that means the rule should apply. That's what the explicit "== false" here does.
+								continue;
 
-						var ruleLambda = rule.ExpressionResolver(currentUser);
-						metaExpressions.Add(
-							rule.Key,
-							ReplacingExpressionVisitor.Replace(
-								ruleLambda.Parameters.Single(),
-								sourceExpressionConverted,
-								ruleLambda.Body
-							)
-						);
+							var ruleLambda = rule.ExpressionResolver(await authRetriever.GetAsync());
+							metaExpressions.Add(
+								rule.Key,
+								ReplacingExpressionVisitor.Replace(
+									ruleLambda.Parameters.Single(),
+									sourceExpressionConverted,
+									ruleLambda.Body
+								)
+							);
+						}
 					}
 				}
 				if (metaExpressions.Any())
 				{
+					// TODO: Use C# 12's type aliases here
 					Type dictType = typeof(Dictionary<string, bool>);
 					var dictInit = Expression.ListInit(
 						Expression.New(dictType),

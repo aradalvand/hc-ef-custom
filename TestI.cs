@@ -53,7 +53,7 @@ public class Test1I<TDto> where TDto : BaseDto
 				var namesakeEntityProp = typeof(TEntity).GetProperty(dtoProp.Name); // NOTE: Property on the entity type with the same name.
 				if (
 					namesakeEntityProp is null ||
-					!AreAssignable(dtoProp.PropertyType, namesakeEntityProp.PropertyType)
+					!Helpers.AreAssignable(dtoProp.PropertyType, namesakeEntityProp.PropertyType)
 				)
 					throw new InvalidOperationException($"Property '{dtoProp.Name}' on the DTO type '{typeof(TDto)}' was not configured explicitly and no implicitly matching property with the same name and type on the entity type was found..");
 
@@ -65,28 +65,6 @@ public class Test1I<TDto> where TDto : BaseDto
 				Console.WriteLine($"{dtoProp.DeclaringType.Name}.{dtoProp.Name} = {body.ToReadableString()}");
 				Console.ResetColor();
 				Mappings.PropertyExpressions[dtoProp] = expression;
-
-				static bool AreAssignable(Type dtoProp, Type entityProp)
-				{
-					// NOTE: We check "assignability" and not equality because the entity prop might be, for example, ICollection while
-					if (dtoProp.IsAssignableFrom(entityProp)) // NOTE: Simple cases like where the types are directly assignable
-						return true;
-
-					// TODO: Improve
-					if (
-						entityProp.IsAssignableTo(typeof(IEnumerable<object>)) &&
-						dtoProp.IsAssignableTo(typeof(IEnumerable<object>))
-					)
-					{
-						entityProp = entityProp.GetGenericArguments().First();
-						dtoProp = dtoProp.GetGenericArguments().First();
-					}
-					var entityPropDtoType = Mappings.Types.GetValueOrDefault(entityProp);
-					if (entityPropDtoType is not null && dtoProp.IsAssignableFrom(entityPropDtoType))
-						return true;
-
-					return false;
-				}
 			}
 		});
 	}
@@ -118,12 +96,15 @@ public class PropertyMappingDescriptorI<TDto, TEntity>
 		_descriptor = descriptor;
 	}
 
-	public PropertyMappingDescriptorI<TDto, TEntity> MapTo(
-		Expression<Func<TEntity, object>> map
+	public PropertyMappingDescriptorI<TDto, TEntity> MapTo<TResult>(
+		Expression<Func<TEntity, TResult?>> map
 	)
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
+			var property = (PropertyInfo)d.Member!;
+			if (!Helpers.AreAssignable(property.PropertyType, typeof(TResult)))
+				throw new InvalidOperationException();
 			Mappings.PropertyExpressions[(PropertyInfo)d.Member!] = map;
 		});
 		return this;

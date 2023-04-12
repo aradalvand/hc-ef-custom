@@ -9,6 +9,8 @@ builder.Services.AddDbContextPool<AppDbContext>(o => o
 	.UseProjectables()
 );
 
+builder.Services.AddScoped<AuthRetriever>();
+
 builder.Services
 	.AddGraphQLServer()
 	.AddProjections() // TODO: What is `IProjectionConvention` and `IProjectionProvider`?

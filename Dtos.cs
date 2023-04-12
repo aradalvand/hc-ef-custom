@@ -14,19 +14,19 @@ public abstract class BaseDto
 	[EditorBrowsable(EditorBrowsableState.Never)]
 	public IReadOnlyDictionary<string, bool> _Meta { get; init; } = default!;
 }
-// TODO: Could probably also be record (with the special syntax) without any change to the projection middleware
+
 public class CourseDto : BaseDto
 {
 	public string Title { get; init; } = default!;
 	public double AverageRating { get; init; } = default!;
 	public int LessonsCount { get; init; } = default!;
 	public InstructorDto Instructor { get; init; } = default!;
-	// public IEnumerable<LessonDto> Lessons { get; init; } = default!;
+	public IEnumerable<LessonDto> Lessons { get; init; } = default!;
 }
 
 public class RatingDto : BaseDto
 {
-	public CourseDto Course { get; set; } = default!;
+	public CourseDto Course { get; init; } = default!;
 	public byte Stars { get; init; } = default!;
 }
 
@@ -40,22 +40,21 @@ public class InstructorDto : BaseDto
 
 public abstract class LessonDto : BaseDto
 {
-	public string Title { get; set; } = default!;
+	public string Title { get; init; } = default!;
 
-	public CourseDto Course { get; set; } = default!;
+	public CourseDto Course { get; init; } = default!;
 }
 
 public class VideoLessonDto : LessonDto
 {
-	public Uri Url { get; set; } = default!;
+	public Uri Url { get; init; } = default!;
 }
 
 public class ArticleLessonDto : LessonDto
 {
-	public string Text { get; set; } = default!;
+	public string Text { get; init; } = default!;
 }
-// ---
-// public class CourseType : MappedObjectType<CourseDto, Course>
+
 public class CourseType : ObjectType<CourseDto>
 {
 	protected override void Configure(IObjectTypeDescriptor<CourseDto> descriptor)
@@ -64,12 +63,20 @@ public class CourseType : ObjectType<CourseDto>
 		{
 			d.Property(c => c.Title)
 				.UseAuth(x => x
-					.Must(currentUser => c => c.Lessons.Count() > currentUser.Id)
+					.MustBeAuthenticated()
+					.Must(currentUser => c => c.Lessons.Count() > currentUser!.Id)
 				);
+
+			d.Property(c => c.AverageRating)
+				.UseAuth(x => x
+					.MustBeAuthenticated()
+					.MustHaveRole(UserRole.Admin)
+				);
+
 			d.Property(c => c.LessonsCount).MapTo(c => c.Lessons.Count)
 				.UseAuth(x => x
 					.MustBeAuthenticated()
-					.Must(currentUser => c => c.Ratings.Any(r => r.Stars > currentUser.Id))
+					.Must(currentUser => c => c.Ratings.Any(r => r.Stars < currentUser!.Id))
 				);
 		});
 	}

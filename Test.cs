@@ -74,11 +74,12 @@ public class Test1<TDto> where TDto : BaseDto
 					Mappings.PropertyExpressions[dtoProp] = expr;
 					continue;
 				}
+				// TODO: Also inherit/default to the base type's auth stuff
 
 				var namesakeEntityProp = typeof(TEntity).GetProperty(dtoProp.Name); // NOTE: Property on the entity type with the same name.
 				if (
 					namesakeEntityProp is null ||
-					!AreAssignable(dtoProp.PropertyType, namesakeEntityProp.PropertyType)
+					!Helpers.AreAssignable(dtoProp.PropertyType, namesakeEntityProp.PropertyType)
 				)
 					throw new InvalidOperationException($"Property '{dtoProp.Name}' on the DTO type '{typeof(TDto)}' was not configured explicitly and no implicitly matching property with the same name and type on the entity type was found..");
 
@@ -90,28 +91,6 @@ public class Test1<TDto> where TDto : BaseDto
 				Console.WriteLine($"{dtoProp.DeclaringType.Name}.{dtoProp.Name} = {body.ToReadableString()}");
 				Console.ResetColor();
 				Mappings.PropertyExpressions[dtoProp] = expression;
-
-				static bool AreAssignable(Type dtoProp, Type entityProp)
-				{
-					// NOTE: We check "assignability" and not equality because the entity prop might be, for example, ICollection while
-					if (dtoProp.IsAssignableFrom(entityProp)) // NOTE: Simple cases like where the types are directly assignable
-						return true;
-
-					// TODO: Improve
-					if (
-						entityProp.IsAssignableTo(typeof(IEnumerable<object>)) &&
-						dtoProp.IsAssignableTo(typeof(IEnumerable<object>))
-					)
-					{
-						entityProp = entityProp.GetGenericArguments().First();
-						dtoProp = dtoProp.GetGenericArguments().First();
-					}
-					var entityPropDtoType = Mappings.Types.GetValueOrDefault(entityProp);
-					if (entityPropDtoType is not null && dtoProp.IsAssignableFrom(entityPropDtoType))
-						return true;
-
-					return false;
-				}
 			}
 		});
 	}
@@ -126,7 +105,7 @@ public class MappingDescriptor<TDto, TEntity>
 		_descriptor = descriptor;
 	}
 
-	public PropertyMappingDescriptor<TDto, TEntity, TProperty> Property<TProperty>(
+	public PropertyMappingDescriptor<TDto, TEntity> Property<TProperty>(
 		Expression<Func<TDto, TProperty?>> propertySelector
 	)
 	{
@@ -134,7 +113,7 @@ public class MappingDescriptor<TDto, TEntity>
 	}
 }
 
-public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
+public class PropertyMappingDescriptor<TDto, TEntity>
 {
 	private readonly IObjectFieldDescriptor _descriptor;
 
@@ -143,32 +122,33 @@ public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
 		_descriptor = descriptor;
 	}
 
-	public PropertyMappingDescriptor<TDto, TEntity, TProperty> MapTo(
-		Expression<Func<TEntity, TProperty>> map
+	// NOTE: We don't enforce that `TResult` is the same as the property's type because it could be an entity that's mappable to a DTO (e.g. )
+	public PropertyMappingDescriptor<TDto, TEntity> MapTo<TResult>(
+		Expression<Func<TEntity, TResult?>> map
 	)
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
-			Mappings.PropertyExpressions[(PropertyInfo)d.Member!] = map;
+			var property = (PropertyInfo)d.Member!;
+			if (!Helpers.AreAssignable(property.PropertyType, typeof(TResult)))
+				throw new InvalidOperationException();
+			Mappings.PropertyExpressions[property] = map;
 		});
 		return this;
 	}
 
-	public PropertyMappingDescriptor<TDto, TEntity, TProperty> UseAuth(
-		Action<PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>> configure
+	public PropertyMappingDescriptor<TDto, TEntity> UseAuth(
+		Action<PropertyAuthMappingDescriptor<TDto, TEntity>> configure
 	)
 	{
-		_descriptor.Extend().OnBeforeCreate(d =>
-		{
-			// d.ContextData[WellKnownContextKeys.UseAuth] = true;
-		});
 		configure(new(_descriptor));
 		return this;
 	}
 }
 
-public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
+public class PropertyAuthMappingDescriptor<TDto, TEntity>
 {
+	// TODO: Use C# 12's primary constructors
 	private readonly IObjectFieldDescriptor _descriptor;
 
 	public PropertyAuthMappingDescriptor(IObjectFieldDescriptor descriptor)
@@ -176,23 +156,32 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 		_descriptor = descriptor;
 	}
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustBeAuthenticated()
+	// TODO: Use C# 12's type aliases for the return types of these methods
+	public PropertyAuthMappingDescriptor<TDto, TEntity> MustBeAuthenticated() =>
+		Must(currentUser => currentUser is not null);
+
+	public PropertyAuthMappingDescriptor<TDto, TEntity> MustNotBeAuthenticated() =>
+ 		Must(currentUser => currentUser is null);
+
+	public PropertyAuthMappingDescriptor<TDto, TEntity> MustHaveRole(UserRole role) =>
+		Must(currentUser => currentUser!.Role == role);
+
+	public PropertyAuthMappingDescriptor<TDto, TEntity> MustNotHaveRule(UserRole role) =>
+		Must(currentUser => currentUser!.Role != role);
+
+	public PropertyAuthMappingDescriptor<TDto, TEntity> Must(Func<AuthenticatedUser?, bool> rule)
 	{
+		_descriptor.Extend().OnBeforeCreate(d =>
+		{
+			Mappings.PropertyAuthPreRules.AddValueItem((PropertyInfo)d.Member!, rule);
+		});
+
 		return this;
 	}
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustHaveRole()
-	{
-		return this;
-	}
-
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotHaveRule()
-	{
-		return this;
-	}
-
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
-		Func<AuthenticatedUser, Expression<Func<TEntity, bool>>> expressionResolver
+	public PropertyAuthMappingDescriptor<TDto, TEntity> Must(
+		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> expressionResolver,
+		Func<ISelection, bool>? shouldApply = null
 	)
 	{
 		string key = Guid.NewGuid().ToString("N");
@@ -200,7 +189,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 		{
 			Mappings.PropertyAuthRules.AddValueItem(
 				(PropertyInfo)d.Member!,
-				new(key, expressionResolver)
+				new(key, expressionResolver, shouldApply)
 			);
 		});
 		_descriptor.Use(next => async context =>
@@ -210,7 +199,11 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 			bool permitted = context.Parent<CourseDto>()._Meta[key];
 			if (!permitted)
 			{
-				context.ReportError("Not permitted");
+				context.ReportError(new Error(
+					message: "شما اجازه دسترسی به این فیلد را ندارید.",
+					code: "NOT_AUTHORIZED",
+					path: context.Path
+				));
 				context.Result = null;
 			}
 		});
@@ -221,25 +214,14 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 
 public record AuthRule(
 	string Key,
-	Func<AuthenticatedUser, LambdaExpression> ExpressionResolver,
+	Func<AuthenticatedUser?, LambdaExpression> ExpressionResolver,
 	Func<ISelection, bool>? ShouldApply = null
 );
 
-public record FieldStuff
-{
-	public bool UseAuth { get; init; }
-	public List<Func<AuthenticatedUser, bool>> PreExecutionRules { get; init; } = new();
-	// public List<AuthRule> UseAuth { get; init; }
-}
-
-public record AuthenticatedUser(
-	int Id
-);
-
-public class UseCustomProjection : ObjectFieldDescriptorAttribute
+public class UseProjector : ObjectFieldDescriptorAttribute
 {
 	private ResultType _resultType;
-	public UseCustomProjection(ResultType resultType, [CallerLineNumber] int order = 0)
+	public UseProjector(ResultType resultType, [CallerLineNumber] int order = 0)
 	{
 		_resultType = resultType;
 		Order = order;
@@ -288,6 +270,7 @@ public static class Mappings // TEMP
 	public static Dictionary<Type, Type> Types = new();
 	public static Dictionary<PropertyInfo, LambdaExpression> PropertyExpressions = new();
 	public static Dictionary<PropertyInfo, List<AuthRule>> PropertyAuthRules = new();
+	public static Dictionary<PropertyInfo, List<Func<AuthenticatedUser?, bool>>> PropertyAuthPreRules = new();
 }
 
 public static class DictionaryExtensions
@@ -303,4 +286,57 @@ public static class DictionaryExtensions
 		else
 			dict.Add(key, new() { newValueItem });
 	}
+}
+
+public enum UserRole
+{
+	Admin
+}
+
+public record AuthenticatedUser(
+	int Id,
+	UserRole? Role
+);
+
+public static class Helpers // TODO
+{
+	public static bool AreAssignable(Type dtoProp, Type entityProp)
+	{
+		// NOTE: We check "assignability" and not equality because the entity prop might be, for example, ICollection while
+		if (dtoProp.IsAssignableFrom(entityProp)) // NOTE: Simple cases like where the types are directly assignable
+			return true;
+
+		// TODO: Improve
+		if (
+			entityProp.IsAssignableTo(typeof(IEnumerable<object>)) &&
+			dtoProp.IsAssignableTo(typeof(IEnumerable<object>))
+		)
+		{
+			entityProp = entityProp.GetGenericArguments().Single();
+			dtoProp = dtoProp.GetGenericArguments().Single();
+		}
+		var entityPropDtoType = Mappings.Types.GetValueOrDefault(entityProp);
+		if (entityPropDtoType is not null && dtoProp.IsAssignableFrom(entityPropDtoType))
+			return true;
+
+		return false;
+	}
+}
+
+public class AuthRetriever
+{
+	private readonly Lazy<Task<AuthenticatedUser?>> _taskLazy;
+
+	public AuthRetriever(AppDbContext db)
+	{
+		// NOTE: Lazy<T> is thread-safe by default (so we don't need to explicitly pass "isThreadSafe: true" to the constructor, which is what I initially thought should be done in order to make it thread-safe), and we do need this thread-safety here since GraphQL query fields can run in parallel and therefore the `GetAsync` method below could be called simultaneously by multiple threads. We need to make sure that initialization function (which makes calls to the database) gets executed only once.
+		_taskLazy = new(async () =>
+		{
+			return await db.Lessons.Where(l => l.Id == 1)
+				.Select(l => new AuthenticatedUser(l.Id, null))
+				.SingleOrDefaultAsync();
+		});
+	}
+
+	public Task<AuthenticatedUser?> GetAsync() => _taskLazy.Value;
 }
