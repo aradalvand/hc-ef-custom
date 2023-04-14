@@ -76,30 +76,27 @@ public class CustomProjectionMiddleware
 
 				List<MemberAssignment> assignments = new();
 				Dictionary<string, Expression> metaExpressions = new();
-				foreach (ISelection subSelection in context.GetSelections(objectType, selection))
+				foreach (ISelection childSelection in context.GetSelections(objectType, selection))
 				{
-					if (subSelection.Field.IsIntrospectionField)
+					if (childSelection.Field.IsIntrospectionField)
 						continue;
 
-					PropertyInfo dtoProperty = (PropertyInfo)subSelection.Field.Member!; // NOTE: We can safely assume that the field corresponds to a property.
+					PropertyInfo dtoProperty = (PropertyInfo)childSelection.Field.Member!; // NOTE: We can safely assume that the field corresponds to a property.
+
+					var authRules = Mappings.PropertyAuthRules.GetValueOrDefault(dtoProperty)
+						?.Where(r => r.ShouldApply?.Invoke(context, childSelection) ?? true) // NOTE: If the `ShouldApply` func is null, that means the rule should apply in all circumstances.
+						.ToList() ?? Enumerable.Empty<AuthRule>();
 
 					// TODO: How about we do this in the field middlewares?
-					if (Mappings.PropertyAuthPreRules.TryGetValue(dtoProperty, out var preRules))
+					foreach (var rule in authRules.OfType<PreAuthRule>())
 					{
-						foreach (PreAuthRule preRule in preRules)
+						if (!rule.Check(await authRetriever.User))
 						{
-							if (preRule.ShouldApply?.Invoke(context, subSelection) == false)
-								continue;
-
-							bool passed = preRule.Check(await authRetriever.User);
-							if (!passed)
-							{
-								// TODO: Accumulate all the errors or just report the first one?
-								throw new GraphQLException(new Error(
-									message: "دسترسی مجاز نیست.",
-									code: "NOT_AUTHORIZED"
-								));
-							}
+							// TODO: Accumulate all the errors or just report the first one?
+							throw new GraphQLException(new Error(
+								message: "دسترسی مجاز نیست.",
+								code: "NOT_AUTHORIZED"
+							));
 						}
 					}
 
@@ -116,14 +113,14 @@ public class CustomProjectionMiddleware
 						propertyLambda.Body
 					);
 
-					if (subSelection.SelectionSet is null)
+					if (childSelection.SelectionSet is null)
 					{
 						var assignment = Expression.Bind(dtoProperty, fieldExpression);
 						assignments.Add(assignment);
 					}
 					else
 					{
-						var subProjection = await ProjectAsync(fieldExpression, subSelection);
+						var subProjection = await ProjectAsync(fieldExpression, childSelection);
 						var assignment = Expression.Bind(
 							dtoProperty,
 							// NOTE: Assumes that the nullability of the type of the entity property actually matches the nullability of the corresponding thing in the database; which is true in our case, but this is a mere assumption nonetheless.
@@ -138,23 +135,17 @@ public class CustomProjectionMiddleware
 						assignments.Add(assignment);
 					}
 
-					if (Mappings.PropertyAuthRules.TryGetValue(dtoProperty, out var authRules))
+					foreach (var rule in authRules.OfType<InjectedAuthRule>())
 					{
-						foreach (AuthRule rule in authRules)
-						{
-							if (rule.ShouldApply?.Invoke(context, subSelection) == false) // NOTE: If the `ShouldApply` func is null, that means the rule should apply. That's what the explicit "== false" here does.
-								continue;
-
-							var ruleLambda = rule.ExpressionResolver(await authRetriever.User);
-							metaExpressions.Add(
-								rule.Key,
-								ReplacingExpressionVisitor.Replace(
-									ruleLambda.Parameters.Single(),
-									sourceExpressionConverted,
-									ruleLambda.Body
-								)
-							);
-						}
+						var ruleLambda = rule.ExpressionResolver(await authRetriever.User);
+						metaExpressions.Add(
+							rule.Key,
+							ReplacingExpressionVisitor.Replace(
+								ruleLambda.Parameters.Single(),
+								sourceExpressionConverted,
+								ruleLambda.Body
+							)
+						);
 					}
 				}
 				if (metaExpressions.Any())

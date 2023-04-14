@@ -80,19 +80,19 @@ public class CourseType : ObjectType<CourseDto>
 		descriptor.Mapped().To<Course>(d =>
 		{
 			d.Property(c => c.Title)
-				.UseAuth(x => x
+				.UseAuth(a => a
 					.MustBeAuthenticated()
 					.Must(currentUser => c => c.Lessons.Count() > currentUser!.Id)
 				);
 
 			d.Property(c => c.AverageRating)
-				.UseAuth(x => x
+				.UseAuth(a => a
 					.MustBeAuthenticated()
 					.MustHaveRole(UserRole.Admin)
 				);
 
 			d.Property(c => c.LessonsCount).MapTo(c => c.Lessons.Count)
-				.UseAuth(x => x
+				.UseAuth(a => a
 					.MustBeAuthenticated()
 					.Must(currentUser => c => c.Ratings.Any(r => r.Stars < currentUser!.Id))
 				);
@@ -131,9 +131,10 @@ public class VideoLessonType : ObjectType<VideoLessonDto>
 		{
 			c.Property(c => c.Title).MapTo(c => "((" + c.Title + "))");
 			c.Property(c => c.Video)
-				.UseAuth(x => x
-					.MustBeAuthenticated(x => x.WhenSelected(v => v.Id))
-					.Must(currentUser => l => l.Course.Ratings.Count() > 1, x => x.WhenSelected(v => v.Id))
+				.UseAuth(a => a
+					.MustBeAuthenticated()
+					.Must(currentUser => l => l.Course.Ratings.Count() > 1)
+					.WhenSelected(v => v.Id)
 				);
 		});
 	}

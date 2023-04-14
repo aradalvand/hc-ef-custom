@@ -161,28 +161,32 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 
 	// TODO: Use C# 12's type aliases for the return types of these methods
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustBeAuthenticated(
-		Func<ShouldApplyBuilder<TProperty>, Func<IResolverContext, ISelection, bool>>? shouldApply = null
-	) => Must(currentUser => currentUser is not null, shouldApply);
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
+	) => MustPre(currentUser => currentUser is not null, shouldApply);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotBeAuthenticated() =>
- 		Must(currentUser => currentUser is null);
+ 		MustPre(currentUser => currentUser is null);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustHaveRole(UserRole role) =>
-		Must(currentUser => currentUser!.Role == role);
+		MustPre(currentUser => currentUser!.Role == role);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotHaveRule(UserRole role) =>
-		Must(currentUser => currentUser!.Role != role);
+		MustPre(currentUser => currentUser!.Role != role);
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustPre(
 		Func<AuthenticatedUser?, bool> rule,
-		Func<ShouldApplyBuilder<TProperty>, Func<IResolverContext, ISelection, bool>>? shouldApply = null
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
 	)
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
-			Mappings.PropertyAuthPreRules.AddValueItem(
+			Mappings.PropertyAuthRules.AddValueItem(
 				(PropertyInfo)d.Member!,
-				new(shouldApply?.Invoke(new()), rule)
+				new PreAuthRule
+				{
+					Check = rule,
+					ShouldApply = shouldApply,
+				}
 			);
 		});
 
@@ -191,23 +195,30 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
 		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> expressionResolver,
-		Func<ShouldApplyBuilder<TProperty>, Func<IResolverContext, ISelection, bool>>? shouldApply = null
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
 	)
 	{
 		string key = Guid.NewGuid().ToString("N");
+
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
 			Mappings.PropertyAuthRules.AddValueItem(
 				(PropertyInfo)d.Member!,
-				new(key, shouldApply?.Invoke(new()), expressionResolver)
+				new InjectedAuthRule
+				{
+					Key = key,
+					ExpressionResolver = expressionResolver,
+					ShouldApply = shouldApply,
+				}
 			);
 		});
+
 		_descriptor.Use(next => async context =>
 		{
 			await next(context);
 
 			var parent = context.Parent<BaseDto>();
-			// NOTE: In cases where the `ShouldApply` returns `false`, the `_Meta` property here is either null, or does not contain this key.
+			// NOTE: In cases where the `ShouldApply` returns `false`, the `_Meta` property here will either be null, or will not contain this particular rule's key.
 			if (
 				parent._Meta is not null &&
 				parent._Meta.TryGetValue(key, out var permitted) &&
@@ -225,37 +236,57 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 
 		return this;
 	}
-}
 
-public class ShouldApplyBuilder<TProperty>
-{
-	public Func<IResolverContext, ISelection, bool> WhenSelected<TInnerProperty>(
-		Expression<Func<TProperty, TInnerProperty>> propertySelector
+	/// <summary>
+	/// Adds a applicability condition to all the previously added auth rules that enforces that the
+	/// given property must be selected on the child property (which must be an complex type itself)
+	/// in order for the rule to apply.
+	/// </summary>
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> WhenSelected<TInnerProperty>(
+		Expression<Func<TProperty, TInnerProperty>> innerPropertySelector
 	)
 	{
-		if (propertySelector.Body is not MemberExpression memberExpr)
+		// TODO: Would've been nice if there was a way to avoid all of this manual logic:
+		if (
+			innerPropertySelector.Body is not MemberExpression memberExpr ||
+			memberExpr.Member is not PropertyInfo innerProp ||
+			innerProp.DeclaringType != typeof(TProperty) // NOTE: The user shouldn't choose a "deep" property
+		)
 			throw new InvalidOperationException();
 
-		return (ctx, selection) =>
+		_descriptor.Extend().OnBeforeCreate(d =>
 		{
-			var type = ctx.Operation.GetPossibleTypes(selection).Single(); // TODO: Good enough for now, but
-			var childSelections = ctx.GetSelections(type, selection);
-			return childSelections.Any(s => s.Field.Member == memberExpr.Member);
-		};
+			if (Mappings.PropertyAuthRules.TryGetValue((PropertyInfo)d.Member!, out var rules))
+			{
+				foreach (var rule in rules)
+				{
+					rule.ShouldApply ??= (context, selection) =>
+					{
+						var type = context.Operation.GetPossibleTypes(selection).Single(); // TODO: Good enough for now, but
+						var childSelections = context.GetSelections(type, selection);
+						return childSelections.Any(s => s.Field.Member == innerProp);
+					};
+				}
+			}
+		});
+		return this;
 	}
 }
 
 // TODO: Use a type alias for `Func<IResolverContext, ISelection, bool>`
-public record AuthRule(
-	string Key,
-	Func<IResolverContext, ISelection, bool>? ShouldApply,
-	Func<AuthenticatedUser?, LambdaExpression> ExpressionResolver
-);
-
-public record PreAuthRule(
-	Func<IResolverContext, ISelection, bool>? ShouldApply,
-	Func<AuthenticatedUser?, bool> Check
-);
+public abstract class AuthRule
+{
+	public required Func<IResolverContext, ISelection, bool>? ShouldApply { get; set; }
+}
+public class PreAuthRule : AuthRule
+{
+	public required Func<AuthenticatedUser?, bool> Check { get; set; }
+}
+public class InjectedAuthRule : AuthRule
+{
+	public required string Key { get; set; }
+	public required Func<AuthenticatedUser?, LambdaExpression> ExpressionResolver { get; set; }
+}
 
 public class UseProjector : ObjectFieldDescriptorAttribute
 {
@@ -309,7 +340,6 @@ public static class Mappings // TEMP
 	public static Dictionary<Type, Type> Types = new();
 	public static Dictionary<PropertyInfo, LambdaExpression> PropertyExpressions = new();
 	public static Dictionary<PropertyInfo, List<AuthRule>> PropertyAuthRules = new();
-	public static Dictionary<PropertyInfo, List<PreAuthRule>> PropertyAuthPreRules = new();
 }
 
 public static class DictionaryExtensions
