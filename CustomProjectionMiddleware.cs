@@ -4,9 +4,7 @@ using HotChocolate.Resolvers;
 using AgileObjects.ReadableExpressions;
 using HotChocolate.Execution.Processing;
 using System.Text.Json;
-using hc_ef_custom.Types;
 using Microsoft.EntityFrameworkCore.Query;
-using System.Collections;
 
 namespace hc_ef_custom;
 
@@ -47,8 +45,8 @@ public class CustomProjectionMiddleware
 		Console.WriteLine("----------");
 
 		// NOTE: Note that we do as little reflection here as we can, we aim to keep the middleware as reflection-free as possible.
-		// TODO: Wouldn't ValueTask be more appropriate? Since most of the time no async operation will actually end up being executed within the method.
-		async Task<Expression> ProjectAsync(Expression sourceExpression, ISelection selection)
+		// NOTE: `ValueTask` seems to be a more appropriate return type for this method since most of the time it actually completes synchronously.
+		async ValueTask<Expression> ProjectAsync(Expression sourceExpression, ISelection selection)
 		{
 			INamedType type = selection.Type.NamedType(); // NOTE: Effectively is either an interface type or an object type — shouldn't be a scalar for example — and is a "mapped type" configured via the `Mapped()` method on `IObjectTypeFieldDescriptor`.
 			Type dtoType = type.ToRuntimeType(); // NOTE: There's always a "DTO" CLR type behind every mapped type.
@@ -104,9 +102,10 @@ public class CustomProjectionMiddleware
 
 					var propertyLambda = Mappings.PropertyExpressions[dtoProperty]; // NOTE: Here we use the dictionary's indexer, meaning that that we're basically assuming that an entry exists in the dictionary for every property, because it "should".
 
-					var sourceExpressionConverted = sourceExpression.Type != propertyLambda.Parameters.Single().Type // NOTE: We can safely assume there's only one parameter
-						? Expression.Convert(sourceExpression, objectTypeEntityType)
-						: sourceExpression;
+					var sourceExpressionConverted =
+						sourceExpression.Type != propertyLambda.Parameters.Single().Type // NOTE: We can safely assume there's only one parameter
+							? Expression.Convert(sourceExpression, objectTypeEntityType)
+							: sourceExpression;
 
 					var fieldExpression = ReplacingExpressionVisitor.Replace(
 						propertyLambda.Parameters.Single(),
@@ -140,7 +139,7 @@ public class CustomProjectionMiddleware
 					{
 						foreach (var rule in authRules)
 						{
-							if (rule.ShouldApply?.Invoke(subSelection) == false) // NOTE: If the `ShouldApply` func is null, that means the rule should apply. That's what the explicit "== false" here does.
+							if (rule.ShouldApply?.Invoke(context, subSelection) == false) // NOTE: If the `ShouldApply` func is null, that means the rule should apply. That's what the explicit "== false" here does.
 								continue;
 
 							var ruleLambda = rule.ExpressionResolver(await authRetriever.GetAsync());
@@ -166,10 +165,11 @@ public class CustomProjectionMiddleware
 							Expression.Constant(ex.Key), ex.Value
 						))
 					);
-					assignments.Add(Expression.Bind(
+					var metaAssignment = Expression.Bind(
 						objectTypeDtoType.GetProperty(nameof(BaseDto._Meta))!,
 						dictInit
-					));
+					);
+					assignments.Add(metaAssignment);
 				}
 
 				var memberInit = Expression.MemberInit(

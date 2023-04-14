@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using AgileObjects.ReadableExpressions;
 using HotChocolate.Execution.Processing;
+using HotChocolate.Resolvers;
 using HotChocolate.Types.Descriptors;
 
 namespace hc_ef_custom;
@@ -33,6 +34,8 @@ public class Test1<TDto> where TDto : BaseDto
 	public void To<TEntity>(Action<MappingDescriptor<TDto, TEntity>>? configure = null)
 	{
 		configure?.Invoke(new(_descriptor));
+
+		_descriptor.Name(typeof(TEntity).Name);
 
 		_descriptor.Ignore(d => d._Meta); // NOTE: We do our configuration (such as ignoring the meta property) after the user code, because we want it to take precedence.
 
@@ -131,7 +134,7 @@ public class PropertyMappingDescriptor<TDto, TEntity>
 		{
 			var property = (PropertyInfo)d.Member!;
 			if (!Helpers.AreAssignable(property.PropertyType, typeof(TResult)))
-				throw new InvalidOperationException();
+				throw new InvalidOperationException(); // TODO: Write message
 			Mappings.PropertyExpressions[property] = map;
 		});
 		return this;
@@ -181,7 +184,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity> Must(
 		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> expressionResolver,
-		Func<ISelection, bool>? shouldApply = null
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
 	)
 	{
 		string key = Guid.NewGuid().ToString("N");
@@ -196,8 +199,13 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 		{
 			await next(context);
 
-			bool permitted = context.Parent<CourseDto>()._Meta[key];
-			if (!permitted)
+			var parent = context.Parent<BaseDto>();
+			// NOTE: In cases where the `ShouldApply` returns `false`, the `_Meta` property here is either null, or does not contain this key.
+			if (
+				parent._Meta is not null &&
+				parent._Meta.TryGetValue(key, out var permitted) &&
+				!permitted
+			)
 			{
 				context.ReportError(new Error(
 					message: "شما اجازه دسترسی به این فیلد را ندارید.",
@@ -215,7 +223,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 public record AuthRule(
 	string Key,
 	Func<AuthenticatedUser?, LambdaExpression> ExpressionResolver,
-	Func<ISelection, bool>? ShouldApply = null
+	Func<IResolverContext, ISelection, bool>? ShouldApply = null
 );
 
 public class UseProjector : ObjectFieldDescriptorAttribute
@@ -240,7 +248,7 @@ public class UseProjector : ObjectFieldDescriptorAttribute
 			if (d.Type is not ExtendedTypeReference typeRef ||
 				d.ResultType is null ||
 				!d.ResultType.IsAssignableTo(typeof(IQueryable<object>)))
-				throw new InvalidOperationException();
+				throw new InvalidOperationException(); // TODO: Write message
 
 			// NOTE: In part inspired by https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
 			var entityType = c.TypeInspector.CreateTypeInfo(typeRef.Type).NamedType; // TODO: I don't know why `c.TypeInspector.ExtractNamedType` doesn't work here
@@ -330,12 +338,9 @@ public class AuthRetriever
 	public AuthRetriever(AppDbContext db)
 	{
 		// NOTE: Lazy<T> is thread-safe by default (so we don't need to explicitly pass "isThreadSafe: true" to the constructor, which is what I initially thought should be done in order to make it thread-safe), and we do need this thread-safety here since GraphQL query fields can run in parallel and therefore the `GetAsync` method below could be called simultaneously by multiple threads. We need to make sure that initialization function (which makes calls to the database) gets executed only once.
-		_taskLazy = new(async () =>
-		{
-			return await db.Lessons.Where(l => l.Id == 1)
-				.Select(l => new AuthenticatedUser(l.Id, null))
-				.SingleOrDefaultAsync();
-		});
+		_taskLazy = new(() => db.Lessons.Where(l => l.Id == 1)
+			.Select(l => new AuthenticatedUser(l.Id, null))
+			.SingleOrDefaultAsync());
 	}
 
 	public Task<AuthenticatedUser?> GetAsync() => _taskLazy.Value;

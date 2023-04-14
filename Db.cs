@@ -31,6 +31,7 @@ public class Course : BaseEntity
 {
 	public required int InstructorId { get; set; }
 	public required string Title { get; set; }
+	public required Video PreviewVideo { get; set; }
 
 	[Projectable]
 	public double AverageRating => Ratings.Average(r => r.Stars);
@@ -70,8 +71,24 @@ public abstract class Lesson : BaseEntity
 public class VideoLesson : Lesson
 {
 	public required Uri Url { get; set; }
+
+	public required Video Video { get; set; }
 }
 public class ArticleLesson : Lesson
 {
 	public required string Text { get; set; }
+}
+
+[Owned]
+public class Video
+{
+	public required Guid Id { get; set; }
+	public required Image Thumbnail { get; set; }
+}
+
+[Owned]
+public class Image
+{
+	public required Guid Id { get; set; }
+	public required string Blurhash { get; set; }
 }

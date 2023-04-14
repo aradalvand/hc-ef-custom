@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using hc_ef_custom;
@@ -11,9 +12,11 @@ using hc_ef_custom;
 namespace hcefcustom.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20230413154458_AddOwnedTypes")]
+    partial class AddOwnedTypes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -146,49 +149,7 @@ namespace hcefcustom.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.OwnsOne("hc_ef_custom.Video", "PreviewVideo", b1 =>
-                        {
-                            b1.Property<int>("CourseId")
-                                .HasColumnType("integer");
-
-                            b1.Property<Guid>("Id")
-                                .HasColumnType("uuid");
-
-                            b1.HasKey("CourseId");
-
-                            b1.ToTable("Courses");
-
-                            b1.WithOwner()
-                                .HasForeignKey("CourseId");
-
-                            b1.OwnsOne("hc_ef_custom.Image", "Thumbnail", b2 =>
-                                {
-                                    b2.Property<int>("VideoCourseId")
-                                        .HasColumnType("integer");
-
-                                    b2.Property<string>("Blurhash")
-                                        .IsRequired()
-                                        .HasColumnType("text");
-
-                                    b2.Property<Guid>("Id")
-                                        .HasColumnType("uuid");
-
-                                    b2.HasKey("VideoCourseId");
-
-                                    b2.ToTable("Courses");
-
-                                    b2.WithOwner()
-                                        .HasForeignKey("VideoCourseId");
-                                });
-
-                            b1.Navigation("Thumbnail")
-                                .IsRequired();
-                        });
-
                     b.Navigation("Instructor");
-
-                    b.Navigation("PreviewVideo")
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("hc_ef_custom.Lesson", b =>

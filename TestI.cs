@@ -23,6 +23,8 @@ public class Test1I<TDto> where TDto : BaseDto
 	{
 		configure?.Invoke(new(_descriptor));
 
+		_descriptor.Name(typeof(TEntity).Name);
+
 		_descriptor.Ignore(d => d._Meta); // NOTE: We do our configuration (such as ignoring the meta property) after the user code, because we want it to take precedence.
 
 		_descriptor.Extend().OnBeforeCreate((c, d) =>
