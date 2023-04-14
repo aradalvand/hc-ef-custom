@@ -132,7 +132,13 @@ public class VideoLessonType : ObjectType<VideoLessonDto>
 			c.Property(c => c.Title).MapTo(c => "((" + c.Title + "))");
 			c.Property(c => c.Video)
 				.UseAuth(x => x
-					// .MustBeAuthenticated() // also for this one
+					.MustBeAuthenticated((ctx, selection) =>
+					{
+						var prop = typeof(VideoDto).GetProperty("Id");
+						var type = ctx.Operation.GetPossibleTypes(selection).Single(); // TODO: Good enough for now, but
+						var childSelections = ctx.GetSelections(type, selection);
+						return childSelections.Any(s => s.Field.Member == prop);
+					})
 					.Must(
 						currentUser => l => l.Course.Ratings.Count() > 1,
 						(ctx, selection) =>

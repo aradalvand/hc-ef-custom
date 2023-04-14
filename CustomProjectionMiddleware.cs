@@ -86,9 +86,12 @@ public class CustomProjectionMiddleware
 					// TODO: How about we do this in the field middlewares?
 					if (Mappings.PropertyAuthPreRules.TryGetValue(dtoProperty, out var preRules))
 					{
-						foreach (var preRule in preRules)
+						foreach (PreAuthRule preRule in preRules)
 						{
-							bool passed = preRule.Invoke(await authRetriever.GetAsync());
+							if (preRule.ShouldApply?.Invoke(context, subSelection) == false)
+								continue;
+
+							bool passed = preRule.Check(await authRetriever.GetAsync());
 							if (!passed)
 							{
 								// TODO: Accumulate all the errors or just report the first one?
@@ -137,7 +140,7 @@ public class CustomProjectionMiddleware
 
 					if (Mappings.PropertyAuthRules.TryGetValue(dtoProperty, out var authRules))
 					{
-						foreach (var rule in authRules)
+						foreach (AuthRule rule in authRules)
 						{
 							if (rule.ShouldApply?.Invoke(context, subSelection) == false) // NOTE: If the `ShouldApply` func is null, that means the rule should apply. That's what the explicit "== false" here does.
 								continue;

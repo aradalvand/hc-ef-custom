@@ -160,8 +160,9 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 	}
 
 	// TODO: Use C# 12's type aliases for the return types of these methods
-	public PropertyAuthMappingDescriptor<TDto, TEntity> MustBeAuthenticated() =>
-		Must(currentUser => currentUser is not null);
+	public PropertyAuthMappingDescriptor<TDto, TEntity> MustBeAuthenticated(
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
+	) => Must(currentUser => currentUser is not null, shouldApply);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity> MustNotBeAuthenticated() =>
  		Must(currentUser => currentUser is null);
@@ -172,11 +173,17 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 	public PropertyAuthMappingDescriptor<TDto, TEntity> MustNotHaveRule(UserRole role) =>
 		Must(currentUser => currentUser!.Role != role);
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity> Must(Func<AuthenticatedUser?, bool> rule)
+	public PropertyAuthMappingDescriptor<TDto, TEntity> Must(
+		Func<AuthenticatedUser?, bool> rule,
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
+	)
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
-			Mappings.PropertyAuthPreRules.AddValueItem((PropertyInfo)d.Member!, rule);
+			Mappings.PropertyAuthPreRules.AddValueItem(
+				(PropertyInfo)d.Member!,
+				new(shouldApply, rule)
+			);
 		});
 
 		return this;
@@ -192,7 +199,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 		{
 			Mappings.PropertyAuthRules.AddValueItem(
 				(PropertyInfo)d.Member!,
-				new(key, expressionResolver, shouldApply)
+				new(key, shouldApply, expressionResolver)
 			);
 		});
 		_descriptor.Use(next => async context =>
@@ -220,10 +227,16 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 	}
 }
 
+// TODO: Use a type alias for `Func<IResolverContext, ISelection, bool>`
 public record AuthRule(
 	string Key,
-	Func<AuthenticatedUser?, LambdaExpression> ExpressionResolver,
-	Func<IResolverContext, ISelection, bool>? ShouldApply = null
+	Func<IResolverContext, ISelection, bool>? ShouldApply,
+	Func<AuthenticatedUser?, LambdaExpression> ExpressionResolver
+);
+
+public record PreAuthRule(
+	Func<IResolverContext, ISelection, bool>? ShouldApply,
+	Func<AuthenticatedUser?, bool> Check
 );
 
 public class UseProjector : ObjectFieldDescriptorAttribute
@@ -278,7 +291,7 @@ public static class Mappings // TEMP
 	public static Dictionary<Type, Type> Types = new();
 	public static Dictionary<PropertyInfo, LambdaExpression> PropertyExpressions = new();
 	public static Dictionary<PropertyInfo, List<AuthRule>> PropertyAuthRules = new();
-	public static Dictionary<PropertyInfo, List<Func<AuthenticatedUser?, bool>>> PropertyAuthPreRules = new();
+	public static Dictionary<PropertyInfo, List<PreAuthRule>> PropertyAuthPreRules = new();
 }
 
 public static class DictionaryExtensions
