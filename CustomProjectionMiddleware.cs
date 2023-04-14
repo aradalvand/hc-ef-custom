@@ -91,7 +91,7 @@ public class CustomProjectionMiddleware
 							if (preRule.ShouldApply?.Invoke(context, subSelection) == false)
 								continue;
 
-							bool passed = preRule.Check(await authRetriever.GetAsync());
+							bool passed = preRule.Check(await authRetriever.User);
 							if (!passed)
 							{
 								// TODO: Accumulate all the errors or just report the first one?
@@ -145,7 +145,7 @@ public class CustomProjectionMiddleware
 							if (rule.ShouldApply?.Invoke(context, subSelection) == false) // NOTE: If the `ShouldApply` func is null, that means the rule should apply. That's what the explicit "== false" here does.
 								continue;
 
-							var ruleLambda = rule.ExpressionResolver(await authRetriever.GetAsync());
+							var ruleLambda = rule.ExpressionResolver(await authRetriever.User);
 							metaExpressions.Add(
 								rule.Key,
 								ReplacingExpressionVisitor.Replace(

@@ -108,7 +108,7 @@ public class MappingDescriptor<TDto, TEntity>
 		_descriptor = descriptor;
 	}
 
-	public PropertyMappingDescriptor<TDto, TEntity> Property<TProperty>(
+	public PropertyMappingDescriptor<TDto, TEntity, TProperty> Property<TProperty>(
 		Expression<Func<TDto, TProperty?>> propertySelector
 	)
 	{
@@ -116,7 +116,7 @@ public class MappingDescriptor<TDto, TEntity>
 	}
 }
 
-public class PropertyMappingDescriptor<TDto, TEntity>
+public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
 {
 	private readonly IObjectFieldDescriptor _descriptor;
 
@@ -126,7 +126,7 @@ public class PropertyMappingDescriptor<TDto, TEntity>
 	}
 
 	// NOTE: We don't enforce that `TResult` is the same as the property's type because it could be an entity that's mappable to a DTO (e.g. )
-	public PropertyMappingDescriptor<TDto, TEntity> MapTo<TResult>(
+	public PropertyMappingDescriptor<TDto, TEntity, TProperty> MapTo<TResult>(
 		Expression<Func<TEntity, TResult?>> map
 	)
 	{
@@ -140,8 +140,8 @@ public class PropertyMappingDescriptor<TDto, TEntity>
 		return this;
 	}
 
-	public PropertyMappingDescriptor<TDto, TEntity> UseAuth(
-		Action<PropertyAuthMappingDescriptor<TDto, TEntity>> configure
+	public PropertyMappingDescriptor<TDto, TEntity, TProperty> UseAuth(
+		Action<PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>> configure
 	)
 	{
 		configure(new(_descriptor));
@@ -149,7 +149,7 @@ public class PropertyMappingDescriptor<TDto, TEntity>
 	}
 }
 
-public class PropertyAuthMappingDescriptor<TDto, TEntity>
+public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 {
 	// TODO: Use C# 12's primary constructors
 	private readonly IObjectFieldDescriptor _descriptor;
@@ -160,38 +160,38 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 	}
 
 	// TODO: Use C# 12's type aliases for the return types of these methods
-	public PropertyAuthMappingDescriptor<TDto, TEntity> MustBeAuthenticated(
-		Func<IResolverContext, ISelection, bool>? shouldApply = null
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustBeAuthenticated(
+		Func<ShouldApplyBuilder<TProperty>, Func<IResolverContext, ISelection, bool>>? shouldApply = null
 	) => Must(currentUser => currentUser is not null, shouldApply);
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity> MustNotBeAuthenticated() =>
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotBeAuthenticated() =>
  		Must(currentUser => currentUser is null);
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity> MustHaveRole(UserRole role) =>
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustHaveRole(UserRole role) =>
 		Must(currentUser => currentUser!.Role == role);
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity> MustNotHaveRule(UserRole role) =>
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotHaveRule(UserRole role) =>
 		Must(currentUser => currentUser!.Role != role);
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity> Must(
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
 		Func<AuthenticatedUser?, bool> rule,
-		Func<IResolverContext, ISelection, bool>? shouldApply = null
+		Func<ShouldApplyBuilder<TProperty>, Func<IResolverContext, ISelection, bool>>? shouldApply = null
 	)
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
 			Mappings.PropertyAuthPreRules.AddValueItem(
 				(PropertyInfo)d.Member!,
-				new(shouldApply, rule)
+				new(shouldApply?.Invoke(new()), rule)
 			);
 		});
 
 		return this;
 	}
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity> Must(
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
 		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> expressionResolver,
-		Func<IResolverContext, ISelection, bool>? shouldApply = null
+		Func<ShouldApplyBuilder<TProperty>, Func<IResolverContext, ISelection, bool>>? shouldApply = null
 	)
 	{
 		string key = Guid.NewGuid().ToString("N");
@@ -199,7 +199,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 		{
 			Mappings.PropertyAuthRules.AddValueItem(
 				(PropertyInfo)d.Member!,
-				new(key, shouldApply, expressionResolver)
+				new(key, shouldApply?.Invoke(new()), expressionResolver)
 			);
 		});
 		_descriptor.Use(next => async context =>
@@ -224,6 +224,24 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity>
 		});
 
 		return this;
+	}
+}
+
+public class ShouldApplyBuilder<TProperty>
+{
+	public Func<IResolverContext, ISelection, bool> WhenSelected<TInnerProperty>(
+		Expression<Func<TProperty, TInnerProperty>> propertySelector
+	)
+	{
+		if (propertySelector.Body is not MemberExpression memberExpr)
+			throw new InvalidOperationException();
+
+		return (ctx, selection) =>
+		{
+			var type = ctx.Operation.GetPossibleTypes(selection).Single(); // TODO: Good enough for now, but
+			var childSelections = ctx.GetSelections(type, selection);
+			return childSelections.Any(s => s.Field.Member == memberExpr.Member);
+		};
 	}
 }
 
@@ -356,5 +374,5 @@ public class AuthRetriever
 			.SingleOrDefaultAsync());
 	}
 
-	public Task<AuthenticatedUser?> GetAsync() => _taskLazy.Value;
+	public Task<AuthenticatedUser?> User => _taskLazy.Value;
 }
