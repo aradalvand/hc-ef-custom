@@ -90,38 +90,39 @@ public class CustomProjectionMiddleware
 							? Expression.Convert(sourceExpression, objectTypeEntityType)
 							: sourceExpression;
 
-					var authRules = Mappings.PropertyAuthRules.GetValueOrDefault(dtoProperty)
-						?.Where(r => r.ShouldApply?.Invoke(context, childSelection) ?? true) // NOTE: If the `ShouldApply` func is null, that means the rule should apply in all circumstances.
-						.ToList() ?? Enumerable.Empty<AuthRule>();
-
-					bool skipProjection = false;
-					foreach (var rule in authRules)
+					if (Mappings.PropertyAuthRules.TryGetValue(dtoProperty, out var authRules))
 					{
-						var result = rule.Resolver.Invoke(await authRetriever.User);
-						if (result is LambdaExpression ruleLambda)
+						// NOTE: We filter out the rules that don't apply.
+						authRules = authRules
+							.Where(r => r.ShouldApply?.Invoke(context, childSelection) ?? true) // NOTE: If the `ShouldApply` func is null, that means the rule should apply in all circumstances.
+							.ToList();
+
+						bool skipProjection = false;
+						foreach (var rule in authRules.OfType<PreAuthRule>())
 						{
-							metaExpressions.Add(
-								rule.Key,
-								ReplacingExpressionVisitor.Replace(
-									ruleLambda.Parameters.Single(),
-									sourceExpressionConverted,
-									ruleLambda.Body
-								)
-							);
-						}
-						// TODO: Don't execute the others only the first one?
-						// TODO: Execute the bool ones first (if any is not permitted then don't include the meta expressions)
-						// TODO: Execute only the first bool?
-						else if (result is bool permitted)
-						{
+							bool permitted = rule.IsPermitted(await authRetriever.User);
 							context.SetScopedState(rule.Key, permitted);
 
 							if (!permitted)
+							{
 								skipProjection = true;
+								break; // NOTE: As soon as one pre auth rule fails, we short-circuit; effectively only reporting the first failed pre auth rule.
+							}
+						}
+						if (skipProjection) // NOTE: If any of the pre auth rules fail, then we don't include the property/field in the projection, including any of its meta auth rules. So we skip the rest of the containing `foreach` loop.
+							continue;
+
+						foreach (var rule in authRules.OfType<MetaAuthRule>())
+						{
+							var ruleLambda = rule.GetExpression(await authRetriever.User);
+							var ruleExpr = ReplacingExpressionVisitor.Replace(
+								ruleLambda.Parameters.Single(),
+								sourceExpressionConverted,
+								ruleLambda.Body
+							);
+							metaExpressions.Add(rule.Key, ruleExpr);
 						}
 					}
-					if (skipProjection)
-						continue;
 
 					var propertyExpression = ReplacingExpressionVisitor.Replace(
 						propertyLambda.Parameters.Single(),

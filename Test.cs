@@ -162,29 +162,19 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 	// TODO: Use C# 12's type aliases for the return types of these methods
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustBeAuthenticated(
 		Func<IResolverContext, ISelection, bool>? shouldApply = null
-	) => Must(currentUser => currentUser is not null, shouldApply);
+	) => MustPre(currentUser => currentUser is not null, shouldApply);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotBeAuthenticated() =>
- 		Must(currentUser => currentUser is null);
+ 		MustPre(currentUser => currentUser is null);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustHaveRole(UserRole role) =>
-		Must(currentUser => currentUser!.Role == role);
+		MustPre(currentUser => currentUser!.Role == role);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotHaveRule(UserRole role) =>
-		Must(currentUser => currentUser!.Role != role);
+		MustPre(currentUser => currentUser!.Role != role);
 
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
-		Func<AuthenticatedUser?, bool> resolver,
-		Func<IResolverContext, ISelection, bool>? shouldApply = null
-	) => MustObj(u => resolver(u), shouldApply);
-
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
-		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> resolver,
-		Func<IResolverContext, ISelection, bool>? shouldApply = null
-	) => MustObj(resolver, shouldApply);
-
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustObj(
-		Func<AuthenticatedUser?, object> resolver,
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustPre(
+		Func<AuthenticatedUser?, bool> isPermitted,
 		Func<IResolverContext, ISelection, bool>? shouldApply = null
 	)
 	{
@@ -194,10 +184,10 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 		{
 			Mappings.PropertyAuthRules.AddValueItem(
 				(PropertyInfo)d.Member!,
-				new AuthRule
+				new PreAuthRule
 				{
 					Key = key,
-					Resolver = resolver,
+					IsPermitted = isPermitted,
 					ShouldApply = shouldApply,
 				}
 			);
@@ -207,39 +197,49 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 		{
 			await next(context);
 
-			var permitted = context.GetScopedStateOrDefault<bool?>(key);
-			if (permitted == false)
-			{
-				context.ReportError(new Error(
-					message: "شما اجازه دسترسی به این فیلد را ندارید.",
-					code: "NOT_AUTHORIZED",
-					path: context.Path
-				));
-				context.Result = null;
-			}
+			bool? permitted = context.GetScopedStateOrDefault<bool?>(key); // NOTE: The item could not exist in the scoped context (and by extension the returned value here could be `null`), for example when the `ShouldApply` returns false or a prior pre auth rule fails (pre auth rules have a "fail-fast" kind of behavior.)
+			if (permitted == false) // NOTE: If `permitted` is `null`, we assume permission.
+				context.ReportAuthError();
+		});
 
-			var parent = context.Parent<BaseDto>();
-			// NOTE: In cases where the `ShouldApply` returns `false`, the `_Meta` property here will either be null, or will not contain this particular rule's key.
-			if (
-				parent._Meta is not null &&
-				parent._Meta.TryGetValue(key, out var foo) &&
-				!foo
-			)
-			{
-				context.ReportError(new Error(
-					message: "شما اجازه دسترسی به این فیلد را ندارید.",
-					code: "NOT_AUTHORIZED",
-					path: context.Path
-				));
-				context.Result = null;
-			}
+		return this;
+	}
+
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
+		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> expressionResolver,
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
+	)
+	{
+		string key = Guid.NewGuid().ToString("N");
+
+		_descriptor.Extend().OnBeforeCreate(d =>
+		{
+			Mappings.PropertyAuthRules.AddValueItem(
+				(PropertyInfo)d.Member!,
+				new MetaAuthRule
+				{
+					Key = key,
+					GetExpression = expressionResolver,
+					ShouldApply = shouldApply,
+				}
+			);
+		});
+
+		_descriptor.Use(next => async context =>
+		{
+			await next(context);
+
+			BaseDto parent = context.Parent<BaseDto>();
+			bool? permitted = parent._Meta?.GetValueOrDefault(key, true); // NOTE: In cases where the `ShouldApply` returns `false`, the `_Meta` property here will either be null, or will not contain this particular rule's key.
+			if (permitted == false)
+				context.ReportAuthError();
 		});
 
 		return this;
 	}
 
 	/// <summary>
-	/// Adds a applicability condition to all the previously added auth rules that enforces that the
+	/// Adds an applicability condition to all the previously added auth rules that enforces that the
 	/// given property must be selected on the child property (which must be an complex type itself)
 	/// in order for the rule to apply.
 	/// </summary>
@@ -275,12 +275,32 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 	}
 }
 
+public static class MiddlewareContextExtensions
+{
+	public static void ReportAuthError(this IMiddlewareContext context)
+	{
+		context.ReportError(new Error(
+			message: "شما اجازه دسترسی به این فیلد را ندارید.",
+			code: "NOT_AUTHORIZED",
+			path: context.Path
+		));
+		context.Result = null;
+	}
+}
+
 // TODO: Use C# 12's type alias for `Func<IResolverContext, ISelection, bool>` and so on.
-public class AuthRule
+public abstract class AuthRule
 {
 	public required string Key { get; set; }
 	public required Func<IResolverContext, ISelection, bool>? ShouldApply { get; set; }
-	public required Func<AuthenticatedUser?, object> Resolver { get; set; } // NOTE: Object could either be `bool` of `LambdaExpression`
+}
+public class PreAuthRule : AuthRule
+{
+	public required Func<AuthenticatedUser?, bool> IsPermitted { get; set; }
+}
+public class MetaAuthRule : AuthRule
+{
+	public required Func<AuthenticatedUser?, LambdaExpression> GetExpression { get; set; }
 }
 
 public sealed class UseProjector : ObjectFieldDescriptorAttribute
