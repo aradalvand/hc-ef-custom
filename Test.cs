@@ -162,52 +162,42 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 	// TODO: Use C# 12's type aliases for the return types of these methods
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustBeAuthenticated(
 		Func<IResolverContext, ISelection, bool>? shouldApply = null
-	) => MustPre(currentUser => currentUser is not null, shouldApply);
+	) => Must(currentUser => currentUser is not null, shouldApply);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotBeAuthenticated() =>
- 		MustPre(currentUser => currentUser is null);
+ 		Must(currentUser => currentUser is null);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustHaveRole(UserRole role) =>
-		MustPre(currentUser => currentUser!.Role == role);
+		Must(currentUser => currentUser!.Role == role);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotHaveRule(UserRole role) =>
-		MustPre(currentUser => currentUser!.Role != role);
-
-	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustPre(
-		Func<AuthenticatedUser?, bool> rule,
-		Func<IResolverContext, ISelection, bool>? shouldApply = null
-	)
-	{
-		_descriptor.Extend().OnBeforeCreate(d =>
-		{
-			Mappings.PropertyAuthRules.AddValueItem(
-				(PropertyInfo)d.Member!,
-				new PreAuthRule
-				{
-					Check = rule,
-					ShouldApply = shouldApply,
-				}
-			);
-		});
-
-		return this;
-	}
+		Must(currentUser => currentUser!.Role != role);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
-		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> expressionResolver,
+		Func<AuthenticatedUser?, bool> resolver,
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
+	) => MustObj(u => resolver(u), shouldApply);
+
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
+		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> resolver,
+		Func<IResolverContext, ISelection, bool>? shouldApply = null
+	) => MustObj(resolver, shouldApply);
+
+	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustObj(
+		Func<AuthenticatedUser?, object> resolver,
 		Func<IResolverContext, ISelection, bool>? shouldApply = null
 	)
 	{
-		string key = Guid.NewGuid().ToString("N");
+		string key = Guid.NewGuid().ToString("N"); // NOTE: Exclude the hyphens as they're redundant
 
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
 			Mappings.PropertyAuthRules.AddValueItem(
 				(PropertyInfo)d.Member!,
-				new InjectedAuthRule
+				new AuthRule
 				{
 					Key = key,
-					ExpressionResolver = expressionResolver,
+					Resolver = resolver,
 					ShouldApply = shouldApply,
 				}
 			);
@@ -217,12 +207,23 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 		{
 			await next(context);
 
+			var permitted = context.GetScopedStateOrDefault<bool?>(key);
+			if (permitted == false)
+			{
+				context.ReportError(new Error(
+					message: "شما اجازه دسترسی به این فیلد را ندارید.",
+					code: "NOT_AUTHORIZED",
+					path: context.Path
+				));
+				context.Result = null;
+			}
+
 			var parent = context.Parent<BaseDto>();
 			// NOTE: In cases where the `ShouldApply` returns `false`, the `_Meta` property here will either be null, or will not contain this particular rule's key.
 			if (
 				parent._Meta is not null &&
-				parent._Meta.TryGetValue(key, out var permitted) &&
-				!permitted
+				parent._Meta.TryGetValue(key, out var foo) &&
+				!foo
 			)
 			{
 				context.ReportError(new Error(
@@ -260,6 +261,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 			{
 				foreach (var rule in rules)
 				{
+					// TODO: A cache for the result of these functions?
 					rule.ShouldApply ??= (context, selection) =>
 					{
 						var type = context.Operation.GetPossibleTypes(selection).Single(); // TODO: Good enough for now, but
@@ -273,22 +275,15 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 	}
 }
 
-// TODO: Use a type alias for `Func<IResolverContext, ISelection, bool>`
-public abstract class AuthRule
-{
-	public required Func<IResolverContext, ISelection, bool>? ShouldApply { get; set; }
-}
-public class PreAuthRule : AuthRule
-{
-	public required Func<AuthenticatedUser?, bool> Check { get; set; }
-}
-public class InjectedAuthRule : AuthRule
+// TODO: Use C# 12's type alias for `Func<IResolverContext, ISelection, bool>` and so on.
+public class AuthRule
 {
 	public required string Key { get; set; }
-	public required Func<AuthenticatedUser?, LambdaExpression> ExpressionResolver { get; set; }
+	public required Func<IResolverContext, ISelection, bool>? ShouldApply { get; set; }
+	public required Func<AuthenticatedUser?, object> Resolver { get; set; } // NOTE: Object could either be `bool` of `LambdaExpression`
 }
 
-public class UseProjector : ObjectFieldDescriptorAttribute
+public sealed class UseProjector : ObjectFieldDescriptorAttribute
 {
 	private ResultType _resultType;
 	public UseProjector(ResultType resultType, [CallerLineNumber] int order = 0)
