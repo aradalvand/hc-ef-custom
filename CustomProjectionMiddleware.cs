@@ -30,6 +30,9 @@ public class CustomProjectionMiddleware
 			await ProjectAsync(query.Expression, context.Selection)
 		);
 
+		Console.ForegroundColor = ConsoleColor.Cyan;
+		Console.WriteLine(query.Expression.ToReadableString());
+
 		context.Result = _resultType switch
 		{
 			ResultType.Single => await query.FirstOrDefaultAsync(),
@@ -37,8 +40,6 @@ public class CustomProjectionMiddleware
 			_ => throw new ArgumentOutOfRangeException(),
 		};
 
-		Console.ForegroundColor = ConsoleColor.Cyan;
-		Console.WriteLine(query.Expression.ToReadableString());
 		Console.ForegroundColor = ConsoleColor.Green;
 		Console.WriteLine(JsonSerializer.Serialize(context.Result, new JsonSerializerOptions { WriteIndented = true }));
 		Console.ResetColor();
@@ -83,10 +84,10 @@ public class CustomProjectionMiddleware
 
 					PropertyInfo dtoProperty = (PropertyInfo)childSelection.Field.Member!; // NOTE: We can safely assume that the field corresponds to a property.
 
-					var propertyLambda = Mappings.PropertyExpressions[dtoProperty]; // NOTE: Here we use the dictionary's indexer, meaning that that we're basically assuming that an entry exists in the dictionary for every property, because it "should".
+					var propertyLambda = Mappings.PropertyExpressions[dtoProperty]; // NOTE: Here we use the dictionary's indexer, meaning that that we're basically assuming that an entry exists in the dictionary for every property, because it should.
 
 					var sourceExpressionConverted =
-						sourceExpression.Type != propertyLambda.Parameters.Single().Type // NOTE: We can safely assume there's only one parameter
+						sourceExpression.Type != propertyLambda.Parameters.Single().Type // NOTE: We can safely assume there's only one parameter.
 							? Expression.Convert(sourceExpression, objectTypeEntityType)
 							: sourceExpression;
 
@@ -114,20 +115,26 @@ public class CustomProjectionMiddleware
 
 						foreach (var rule in authRules.OfType<MetaAuthRule>())
 						{
-							var ruleLambda = rule.GetExpression(await authRetriever.User);
-							var ruleExpr = ReplacingExpressionVisitor.Replace(
-								ruleLambda.Parameters.Single(),
-								sourceExpressionConverted,
-								ruleLambda.Body
-							);
+							if (metaExpressions.ContainsKey(rule.Key)) // NOTE: There could be more than one field requested in the GraphQL query that have identical associated auth rules, we don't want that to result in duplicate expressions in the expression we're generating here, as that will in turn cause duplicate queries in the final SQL query. The meta auth rules' keys are hashes of their associated expressions, so this check here takes care of the aforementioned problem.
+								continue;
+
+							var ruleExpr = new ReplacingExpressionVisitor( // NOTE: The static `Replace` method on `ReplacingExpressionVisitor` only accepts individual arguments. To replace more than one thing in one go, we'll have to instantiate the visitor.
+								originals: rule.Expression.Parameters, // NOTE: There will be 2 parameters.
+								replacements: new[] {
+									// NOTE: The first parameter in the original lambda is the user object, and the second will be the actual entity.
+									Expression.Constant(await authRetriever.User),
+									sourceExpressionConverted
+								}
+							).Visit(rule.Expression.Body);
+
 							metaExpressions.Add(rule.Key, ruleExpr);
 						}
 					}
 
 					var propertyExpression = ReplacingExpressionVisitor.Replace(
-						propertyLambda.Parameters.Single(),
-						sourceExpressionConverted,
-						propertyLambda.Body
+						original: propertyLambda.Parameters.Single(),
+						replacement: sourceExpressionConverted,
+						tree: propertyLambda.Body
 					);
 
 					if (childSelection.SelectionSet is null)

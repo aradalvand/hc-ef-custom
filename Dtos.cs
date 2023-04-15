@@ -82,19 +82,25 @@ public class CourseType : ObjectType<CourseDto>
 			d.Property(c => c.Title)
 				.UseAuth(a => a
 					.MustBeAuthenticated()
-					.Must(currentUser => c => c.Lessons.Count() > currentUser!.Id)
+					.Must((currentUser, course) =>
+						currentUser!.Role == UserRole.Admin || course.Id > currentUser!.Id
+					)
 				);
 
 			d.Property(c => c.AverageRating)
 				.UseAuth(a => a
 					.MustBeAuthenticated()
-					.MustHaveRole(UserRole.Admin)
+					.Must((currentUser, course) =>
+						currentUser!.Role == UserRole.Admin || course.Id > currentUser!.Id
+					)
 				);
 
 			d.Property(c => c.LessonsCount).MapTo(c => c.Lessons.Count)
 				.UseAuth(a => a
 					.MustBeAuthenticated()
-					.Must(currentUser => c => c.Ratings.Any(r => r.Stars < currentUser!.Id))
+					.Must((currentUser, course) =>
+						course.Ratings.Any(r => r.Stars < currentUser!.Id)
+					)
 				);
 		});
 	}
@@ -133,7 +139,7 @@ public class VideoLessonType : ObjectType<VideoLessonDto>
 			c.Property(c => c.Video)
 				.UseAuth(a => a
 					.MustBeAuthenticated()
-					.Must(currentUser => l => l.Course.Ratings.Count() > 1)
+					.Must((currentUser, l) => l.Course.Ratings.Count() > 1)
 					.WhenSelected(v => v.Id)
 				);
 		});

@@ -6,6 +6,7 @@ using AgileObjects.ReadableExpressions;
 using HotChocolate.Execution.Processing;
 using HotChocolate.Resolvers;
 using HotChocolate.Types.Descriptors;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace hc_ef_custom;
 
@@ -178,7 +179,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 		Func<IResolverContext, ISelection, bool>? shouldApply = null
 	)
 	{
-		string key = Guid.NewGuid().ToString("N"); // NOTE: Exclude the hyphens as they're redundant
+		string key = Guid.NewGuid().ToString();
 
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
@@ -206,11 +207,11 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 	}
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> Must(
-		Func<AuthenticatedUser?, Expression<Func<TEntity, bool>>> expressionResolver,
+		Expression<Func<AuthenticatedUser?, TEntity, bool>> expression,
 		Func<IResolverContext, ISelection, bool>? shouldApply = null
 	)
 	{
-		string key = Guid.NewGuid().ToString("N");
+		string key = ExpressionEqualityComparer.Instance.GetHashCode(expression).ToString(); // TODO: This is almost perfect, the only problem currently is that the hash will be different if the parameters names are different, which is strange. See https://github.com/dotnet/efcore/issues/30697
 
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
@@ -219,7 +220,7 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 				new MetaAuthRule
 				{
 					Key = key,
-					GetExpression = expressionResolver,
+					Expression = expression,
 					ShouldApply = shouldApply,
 				}
 			);
@@ -300,7 +301,7 @@ public class PreAuthRule : AuthRule
 }
 public class MetaAuthRule : AuthRule
 {
-	public required Func<AuthenticatedUser?, LambdaExpression> GetExpression { get; set; }
+	public required LambdaExpression Expression { get; set; }
 }
 
 public sealed class UseProjector : ObjectFieldDescriptorAttribute
