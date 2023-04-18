@@ -35,12 +35,22 @@ public class Test1<TDto> where TDto : BaseDto
 
 		_descriptor.Ignore(d => d._Meta); // NOTE: We do our configuration (such as ignoring the meta property) after the user code, because we want it to take precedence.
 
-		// NOTE:
-		Mappings.Types[typeof(TEntity)] = typeof(TDto);
-		Mappings.Types[typeof(TDto)] = typeof(TEntity);
+		_descriptor.Extend().OnBeforeCreate((c, d) =>
+		{
+			Console.ForegroundColor = ConsoleColor.Green;
+			Console.WriteLine($"Type OnBeforeCreate: {d.Name}");
+			Console.ResetColor();
+			Console.WriteLine("---");
+			Mappings.Types[typeof(TEntity)] = typeof(TDto);
+			Mappings.Types[typeof(TDto)] = typeof(TEntity);
+		});
 
 		_descriptor.Extend().OnBeforeCompletion((c, d) =>
 		{
+			Console.ForegroundColor = ConsoleColor.Yellow;
+			Console.WriteLine($"Type OnBeforeCompletion: {d.Name}");
+			Console.ResetColor();
+			Console.WriteLine("---");
 			foreach (var field in d.Fields) // NOTE: We examine the type's fields right before the configuration is all done so that we operate upon exactly the fields that are going to be part of the type in the schema. The user might have removed (ignored) or added fields before this.
 			{
 				if (field.IsIntrospectionField)
@@ -123,8 +133,13 @@ public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
 		Expression<Func<TEntity, TResult>> expression
 	)
 	{
-		_descriptor.Extend().OnBeforeCreate(d =>
+		// NOTE: This should `OnBeforeNaming` and not `OnBeforeCreate` because we want the `OnBeforeCreate` of every type to be executed (so that the `Mappings.Types` dictionary is completely populated) before this.
+		_descriptor.Extend().OnBeforeNaming((_, d) =>
 		{
+			Console.ForegroundColor = ConsoleColor.Blue;
+			Console.WriteLine($"Field OnBeforeCreate: {d.Name}");
+			Console.ResetColor();
+			Console.WriteLine("---");
 			var property = (PropertyInfo)d.Member!;
 			if (!Helpers.AreAssignable(property.PropertyType, typeof(TResult)))
 				throw new InvalidOperationException($"The type '{typeof(TResult)}' of the provided expression '{expression}' is not assignable to the property '{property}'.");

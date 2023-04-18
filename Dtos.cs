@@ -103,6 +103,8 @@ public class CourseType : ObjectType<CourseDto>
 						course.Ratings.Any(r => r.Stars < currentUser!.Id)
 					)
 				);
+
+			d.Property(c => c.Lessons).MapTo(c => c.Lessons.Where(l => l.Title.StartsWith("Foo")));
 		});
 	}
 }
@@ -126,7 +128,7 @@ public class LessonType : InterfaceType<LessonDto>
 	{
 		descriptor.Mapped().To<Lesson>(c =>
 		{
-			c.Property(c => c.Title).MapTo(c => "(" + c.Title + ")");
+			// c.Property(c => c.Title).MapTo(c => "(" + c.Title + ")");
 		});
 	}
 }

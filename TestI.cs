@@ -27,11 +27,22 @@ public class Test1I<TDto> where TDto : BaseDto
 
 		_descriptor.Ignore(d => d._Meta); // NOTE: We do our configuration (such as ignoring the meta property) after the user code, because we want it to take precedence.
 
-		Mappings.Types[typeof(TEntity)] = typeof(TDto);
-		Mappings.Types[typeof(TDto)] = typeof(TEntity);
+		_descriptor.Extend().OnBeforeCreate((c, d) =>
+		{
+			Console.ForegroundColor = ConsoleColor.Green;
+			Console.WriteLine($"Type OnBeforeCreate: {d.Name}");
+			Console.ResetColor();
+			Console.WriteLine("---");
+			Mappings.Types[typeof(TEntity)] = typeof(TDto);
+			Mappings.Types[typeof(TDto)] = typeof(TEntity);
+		});
 
 		_descriptor.Extend().OnBeforeCompletion((c, d) =>
 		{
+			Console.ForegroundColor = ConsoleColor.Yellow;
+			Console.WriteLine($"Type OnBeforeCompletion: {d.Name}");
+			Console.ResetColor();
+			Console.WriteLine("---");
 			foreach (var field in d.Fields) // NOTE: We examine the type's fields right before the configuration is all done so that we operate upon exactly the fields that are going to be part of the type in the schema. The user might have removed (ignored) or added fields before this.
 			{
 				if (field.Member is null)
@@ -52,7 +63,6 @@ public class Test1I<TDto> where TDto : BaseDto
 				var param = Expression.Parameter(typeof(TEntity));
 				var body = Expression.Property(param, namesakeEntityProp);
 				var expression = Expression.Lambda(body, param);
-				Console.ForegroundColor = ConsoleColor.Cyan;
 				Mappings.PropertyExpressions[dtoProp] = expression;
 			}
 		});
