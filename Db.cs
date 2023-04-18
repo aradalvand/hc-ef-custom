@@ -34,7 +34,7 @@ public class Course : BaseEntity
 	public required Video PreviewVideo { get; set; }
 
 	[Projectable]
-	public double AverageRating => Ratings.Average(r => r.Stars);
+	public double? AverageRating => Ratings.Average(r => (byte?)r.Stars);
 
 	public required Instructor Instructor { get; set; }
 	public ICollection<Lesson> Lessons { get; set; } = default!;

@@ -27,24 +27,13 @@ public class Test1I<TDto> where TDto : BaseDto
 
 		_descriptor.Ignore(d => d._Meta); // NOTE: We do our configuration (such as ignoring the meta property) after the user code, because we want it to take precedence.
 
-		_descriptor.Extend().OnBeforeCreate((c, d) =>
-		{
-			Console.WriteLine($"OnBeforeCreate: {typeof(TDto).Name}");
-			Mappings.Types[typeof(TEntity)] = typeof(TDto);
-			Mappings.Types[typeof(TDto)] = typeof(TEntity);
-		});
+		Mappings.Types[typeof(TEntity)] = typeof(TDto);
+		Mappings.Types[typeof(TDto)] = typeof(TEntity);
 
 		_descriptor.Extend().OnBeforeCompletion((c, d) =>
 		{
-			Console.WriteLine("---");
-			Console.ForegroundColor = ConsoleColor.Yellow;
-			Console.WriteLine($"OnBeforeCompletion: {typeof(TDto).Name}");
-			Console.ResetColor();
 			foreach (var field in d.Fields) // NOTE: We examine the type's fields right before the configuration is all done so that we operate upon exactly the fields that are going to be part of the type in the schema. The user might have removed (ignored) or added fields before this.
 			{
-				Console.WriteLine("--");
-				Console.WriteLine($"Field: {field}");
-
 				if (field.Member is null)
 					throw new InvalidOperationException("All fields in a mapped type must correspond to a property on the DTO type.");  // NOTE: This prevents the user from creating arbitrary new fields (e.g. `descriptor.Field("FooBar")`).
 
@@ -64,8 +53,6 @@ public class Test1I<TDto> where TDto : BaseDto
 				var body = Expression.Property(param, namesakeEntityProp);
 				var expression = Expression.Lambda(body, param);
 				Console.ForegroundColor = ConsoleColor.Cyan;
-				Console.WriteLine($"{dtoProp.DeclaringType.Name}.{dtoProp.Name} = {body.ToReadableString()}");
-				Console.ResetColor();
 				Mappings.PropertyExpressions[dtoProp] = expression;
 			}
 		});
@@ -83,10 +70,7 @@ public class MappingDescriptorI<TDto, TEntity>
 
 	public PropertyMappingDescriptorI<TDto, TEntity> Property(
 		Expression<Func<TDto, object>> propertySelector
-	)
-	{
-		return new(_descriptor.Field(propertySelector));
-	}
+	) => new(_descriptor.Field(propertySelector));
 }
 
 public class PropertyMappingDescriptorI<TDto, TEntity>

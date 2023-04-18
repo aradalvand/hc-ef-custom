@@ -21,7 +21,7 @@ public abstract class BaseEntityDto : BaseDto
 public class CourseDto : BaseEntityDto
 {
 	public string Title { get; init; } = default!;
-	public double AverageRating { get; init; } = default!;
+	public double? AverageRating { get; init; } = default!;
 	public int LessonsCount { get; init; } = default!;
 	public VideoDto PreviewVideo { get; init; } = default!;
 	public InstructorDto Instructor { get; init; } = default!;
@@ -82,18 +82,19 @@ public class CourseType : ObjectType<CourseDto>
 			d.Property(c => c.Title)
 				.UseAuth(a => a
 					.MustBeAuthenticated()
-					.Must((currentUser, course) =>
-						currentUser!.Role == UserRole.Admin || course.Id > currentUser!.Id
-					)
+					.MustHaveRole(UserRole.Admin)
 				);
 
 			d.Property(c => c.AverageRating)
-				.UseAuth(a => a
-					.MustBeAuthenticated()
-					.Must((currentUser, course) =>
-						currentUser!.Role == UserRole.Admin || course.Id > currentUser!.Id
-					)
-				);
+				.Format(value => Math.Round(value!.Value, 1));
+
+			// d.Property(c => c.AverageRating)
+			// 	.UseAuth(a => a
+			// 		.MustBeAuthenticated()
+			// 		.Must((currentUser, course) =>
+			// 			currentUser!.Role == UserRole.Admin || course.Id > currentUser!.Id
+			// 		)
+			// 	);
 
 			d.Property(c => c.LessonsCount).MapTo(c => c.Lessons.Count)
 				.UseAuth(a => a

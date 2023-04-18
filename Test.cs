@@ -12,15 +12,10 @@ namespace hc_ef_custom;
 
 public static class ObjectTypeDescriptorExtensions
 {
-	public static Test1<TDto> Mapped<TDto>(this IObjectTypeDescriptor<TDto> descriptor) where TDto : BaseDto
-	{
-		return new(descriptor);
-	}
-
-	// public static Test1<TDto> Mapped<TDto>(this IInterfaceTypeDescriptor<TDto> descriptor) where TDto : BaseDto
-	// {
-	// 	return new(descriptor);
-	// }
+	public static Test1<TDto> Mapped<TDto>(
+		this IObjectTypeDescriptor<TDto> descriptor
+	) where TDto : BaseDto
+		=> new(descriptor);
 }
 
 public class Test1<TDto> where TDto : BaseDto
@@ -40,26 +35,17 @@ public class Test1<TDto> where TDto : BaseDto
 
 		_descriptor.Ignore(d => d._Meta); // NOTE: We do our configuration (such as ignoring the meta property) after the user code, because we want it to take precedence.
 
-		_descriptor.Extend().OnBeforeCreate((c, d) =>
-		{
-			Console.WriteLine($"OnBeforeCreate: {typeof(TDto).Name}");
-			Mappings.Types[typeof(TEntity)] = typeof(TDto);
-			Mappings.Types[typeof(TDto)] = typeof(TEntity);
-		});
+		// NOTE:
+		Mappings.Types[typeof(TEntity)] = typeof(TDto);
+		Mappings.Types[typeof(TDto)] = typeof(TEntity);
 
 		_descriptor.Extend().OnBeforeCompletion((c, d) =>
 		{
-			Console.WriteLine("---");
-			Console.ForegroundColor = ConsoleColor.Yellow;
-			Console.WriteLine($"OnBeforeCompletion: {typeof(TDto).Name}");
-			Console.ResetColor();
 			foreach (var field in d.Fields) // NOTE: We examine the type's fields right before the configuration is all done so that we operate upon exactly the fields that are going to be part of the type in the schema. The user might have removed (ignored) or added fields before this.
 			{
 				if (field.IsIntrospectionField)
 					continue;
 
-				Console.WriteLine("-");
-				Console.WriteLine($"Field: {field}");
 				if (field.Member is null)
 					throw new InvalidOperationException("All fields in a mapped type must correspond to a property on the DTO type.");  // NOTE: This prevents the user from creating arbitrary new fields (e.g. `descriptor.Field("FooBar")`).
 
@@ -68,17 +54,28 @@ public class Test1<TDto> where TDto : BaseDto
 				if (Mappings.PropertyExpressions.ContainsKey(dtoProp))
 					continue;
 
-				// NOTE: Try defaulting to the expression on the base type's property, if it indeed exists:
-				var dtoBaseTypeProp = dtoProp.ReflectedType!.BaseType?
-					.GetProperty(dtoProp.Name, dtoProp.PropertyType);
-				if (
-					dtoBaseTypeProp is not null &&
-					Mappings.PropertyExpressions.TryGetValue(dtoBaseTypeProp, out var expr))
+				if (d.HasInterfaces)
 				{
-					Mappings.PropertyExpressions[dtoProp] = expr;
-					continue;
+					var baseType = dtoProp.ReflectedType!.BaseType; // TODO: Perhaps not the most elegant of algorithms
+					var dtoBaseTypeProp = baseType?.GetProperty(dtoProp.Name, dtoProp.PropertyType); // TODO: Should be before the `continue` above
+					if (dtoBaseTypeProp is not null)
+					{
+						if (
+							!Mappings.PropertyAuthRules.ContainsKey(dtoProp) && // NOTE: If there are already auth rules for this property, we don't touch them.
+							Mappings.PropertyAuthRules.TryGetValue(dtoBaseTypeProp, out var authRules)
+						)
+						{
+							Mappings.PropertyAuthRules[dtoProp] = new(authRules); // NOTE: We create a new list and copy `authRules`'s element into it, as opposed to just assign a reference to the same `authRules` here.
+						}
+
+						// NOTE: Try defaulting to the expression on the base type's property, if it indeed exists, and inheriting its auth rules:
+						if (Mappings.PropertyExpressions.TryGetValue(dtoBaseTypeProp, out var expr))
+						{
+							Mappings.PropertyExpressions[dtoProp] = expr;
+							continue;
+						}
+					}
 				}
-				// TODO: Also inherit/default to the base type's auth stuff
 
 				var namesakeEntityProp = typeof(TEntity).GetProperty(dtoProp.Name); // NOTE: Property on the entity type with the same name.
 				if (
@@ -91,9 +88,6 @@ public class Test1<TDto> where TDto : BaseDto
 				var param = Expression.Parameter(typeof(TEntity));
 				var body = Expression.Property(param, namesakeEntityProp);
 				var expression = Expression.Lambda(body, param);
-				Console.ForegroundColor = ConsoleColor.Cyan;
-				Console.WriteLine($"{dtoProp.DeclaringType.Name}.{dtoProp.Name} = {body.ToReadableString()}");
-				Console.ResetColor();
 				Mappings.PropertyExpressions[dtoProp] = expression;
 			}
 		});
@@ -112,9 +106,7 @@ public class MappingDescriptor<TDto, TEntity>
 	public PropertyMappingDescriptor<TDto, TEntity, TProperty> Property<TProperty>(
 		Expression<Func<TDto, TProperty?>> propertySelector
 	)
-	{
-		return new(_descriptor.Field(propertySelector));
-	}
+		=> new(_descriptor.Field(propertySelector));
 }
 
 public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
@@ -128,15 +120,15 @@ public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
 
 	// NOTE: We don't enforce that `TResult` is the same as the property's type because it could be an entity that's mappable to a DTO (e.g. )
 	public PropertyMappingDescriptor<TDto, TEntity, TProperty> MapTo<TResult>(
-		Expression<Func<TEntity, TResult?>> map
+		Expression<Func<TEntity, TResult>> expression
 	)
 	{
 		_descriptor.Extend().OnBeforeCreate(d =>
 		{
 			var property = (PropertyInfo)d.Member!;
 			if (!Helpers.AreAssignable(property.PropertyType, typeof(TResult)))
-				throw new InvalidOperationException(); // TODO: Write message
-			Mappings.PropertyExpressions[property] = map;
+				throw new InvalidOperationException($"The type '{typeof(TResult)}' of the provided expression '{expression}' is not assignable to the property '{property}'.");
+			Mappings.PropertyExpressions[property] = expression;
 		});
 		return this;
 	}
@@ -146,6 +138,19 @@ public class PropertyMappingDescriptor<TDto, TEntity, TProperty>
 	)
 	{
 		configure(new(_descriptor));
+		return this;
+	}
+
+	public PropertyMappingDescriptor<TDto, TEntity, TProperty> Format(
+		Func<TProperty, TProperty> transformer
+	)
+	{
+		_descriptor.Use(next => async context =>
+		{
+			await next(context);
+			if (context.Result is not null)
+				context.Result = transformer((TProperty)context.Result);
+		});
 		return this;
 	}
 }
@@ -163,7 +168,8 @@ public class PropertyAuthMappingDescriptor<TDto, TEntity, TProperty>
 	// TODO: Use C# 12's type aliases for the return types of these methods
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustBeAuthenticated(
 		Func<IResolverContext, ISelection, bool>? shouldApply = null
-	) => MustPre(currentUser => currentUser is not null, shouldApply);
+	)
+		=> MustPre(currentUser => currentUser is not null, shouldApply);
 
 	public PropertyAuthMappingDescriptor<TDto, TEntity, TProperty> MustNotBeAuthenticated() =>
  		MustPre(currentUser => currentUser is null);
@@ -280,11 +286,13 @@ public static class MiddlewareContextExtensions
 {
 	public static void ReportAuthError(this IMiddlewareContext context)
 	{
-		context.ReportError(new Error(
-			message: "شما اجازه دسترسی به این فیلد را ندارید.",
-			code: "NOT_AUTHORIZED",
-			path: context.Path
-		));
+		var error = ErrorBuilder.New()
+			.SetMessage("شما اجازه دسترسی به این فیلد را ندارید.")
+			.SetCode("NOT_AUTHORIZED")
+			.SetPath(context.Path)
+			.AddLocation(context.Selection.SyntaxNode)
+			.Build();
+		context.ReportError(error);
 		context.Result = null;
 	}
 }
@@ -301,13 +309,13 @@ public class PreAuthRule : AuthRule
 }
 public class MetaAuthRule : AuthRule
 {
-	public required LambdaExpression Expression { get; set; }
+	public required LambdaExpression Expression { get; set; } // NOTE: This is actually an `Expression<Func<AuthenticatedUser?, object, bool>>` but we can't use that type because it won't work.
 }
 
-public sealed class UseProjector : ObjectFieldDescriptorAttribute
+public sealed class UseProjectorAttribute : ObjectFieldDescriptorAttribute
 {
 	private ResultType _resultType;
-	public UseProjector(ResultType resultType, [CallerLineNumber] int order = 0)
+	public UseProjectorAttribute(ResultType resultType, [CallerLineNumber] int order = 0)
 	{
 		_resultType = resultType;
 		Order = order;
@@ -326,7 +334,7 @@ public sealed class UseProjector : ObjectFieldDescriptorAttribute
 			if (d.Type is not ExtendedTypeReference typeRef ||
 				d.ResultType is null ||
 				!d.ResultType.IsAssignableTo(typeof(IQueryable<object>)))
-				throw new InvalidOperationException(); // TODO: Write message
+				throw new InvalidOperationException($"The projector middleware cannot be used on field with result type of '{d.ResultType}'.");
 
 			// NOTE: In part inspired by https://github.com/ChilliCream/graphql-platform/blob/main/src/HotChocolate/Data/src/Data/Projections/Extensions/SingleOrDefaultObjectFieldDescriptorExtensions.cs
 			var entityType = c.TypeInspector.CreateTypeInfo(typeRef.Type).NamedType; // TODO: I don't know why `c.TypeInspector.ExtractNamedType` doesn't work here
@@ -350,7 +358,7 @@ public enum ResultType
 	Multiple
 }
 
-public static class Mappings // TEMP
+public static class Mappings // TODO: This should ideally be part of some (Hot Chocolate) schema-wide context data
 {
 	// TODO: Would be nice if the versions of these that the middleware accesses were read-only dictionaries
 	public static Dictionary<Type, Type> Types = new();
@@ -387,7 +395,6 @@ public static class Helpers // TODO
 {
 	public static bool AreAssignable(Type dtoProp, Type entityProp)
 	{
-		// NOTE: We check "assignability" and not equality because the entity prop might be, for example, ICollection while
 		if (dtoProp.IsAssignableFrom(entityProp)) // NOTE: Simple cases like where the types are directly assignable
 			return true;
 
